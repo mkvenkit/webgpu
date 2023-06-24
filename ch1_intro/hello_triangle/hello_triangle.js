@@ -19,9 +19,11 @@ async function main() {
         return;
     }
 
-    // Get a WebGPU context from the canvas and configure it
+    // get the canvas from the document
     const canvas = document.querySelector('canvas');
+    // get WebGPU rendering context from the canvas
     const context = canvas.getContext('webgpu');
+    // configure the context
     const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
     context.configure({
         device,
@@ -30,6 +32,10 @@ async function main() {
 
     // get shaders 
     const response = await fetch("hello_triangle.wgsl");
+    if (!response.ok) {
+        alert(`fetch: HTTP error! status: ${response.status}`);
+        return;
+    }
     const shader_str = await response.text();
     //console.log("shader = ", shader_str);
 

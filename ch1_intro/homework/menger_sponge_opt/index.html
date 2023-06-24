@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGPU Example</title>
+    <script type="module" src="menger.js"></script>
+</head>
+
+<body>
+    <h2>The Menger Sponge</h2>
+    
+    <div>
+        <span>
+            <label for="level">Level</label>
+            <select name="levels" id="levels">
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+            </select>
+        </span>
+        <span>
+            <input type="checkbox" id="rotate" checked>
+            <label for="rotate">Rotate</label>
+        </span>
+    </div>
+
+    <div>
+        <canvas id="webgpuCanvas" width="640" height="480"></canvas>
+    </div>
+</body>
+
+</html>

@@ -7,20 +7,19 @@
 // 
 // ----------------------------------------------------------------------
 
+// define triangle vertices 
+var<private> pos = array<vec3f, 3>(
+    vec3f( 0.0,  0.75, 0.0), 
+    vec3f( 0.0, 0.0,  0.0), 
+    vec3f( 0.75, 0.0,  0.0)
+);
+    
 // vertex shader - entry function 
 @vertex fn vertex_main(
     @builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f 
 {
-    // define triangle vertices 
-    var pos = array<vec3f, 3>(
-        vec3f( 0.0,  0.5, 0.0), 
-        vec3f(-0.5, 0.0,  0.0), 
-        vec3f( 0.5, 0.0,  0.0)
-    );
-    
     // set output position using vertex_index 
-    var output = vec4f(pos[vertexIndex].xyz, 1.0);
-
+    var output = vec4f(pos[vertexIndex], 1.0);
     return output;
 }
 
