@@ -1,14 +1,11 @@
 // ----------------------------------------------------------------------
 // cube.js
 // 
-// Main JavaScript file for the Cube WebGPU example.
+// Part of the Toroidal Helix WebGPU example.
 // 
 // Author: Mahesh Venkitachalam
 // 
 // ----------------------------------------------------------------------
-
-// imports from wgpu-matrix 
-import {mat4} from '../../common/wgpu-matrix.module.js';
 
 // Create cube vertices 
 // Assuming unit cube centered at (0, 0, 0)
@@ -64,29 +61,9 @@ function createCubeVertices() {
     return vertices;
 }
 
-// main function 
-async function main() {
-
-    // get WebGPU adapter 
-    const adapter = await navigator.gpu?.requestAdapter();
-    // get WebGPU device
-    const device = await adapter?.requestDevice();
-    if (!device) {
-        alert("Couldn't get WebGPU device! Need a browser that supports WebGPU!");
-        return;
-    }
-
-    // get the canvas from the document
-    const canvas = document.querySelector('canvas');
-    // get WebGPU rendering context from the canvas
-    const context = canvas.getContext('webgpu');
-    // configure the context
-    const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-    context.configure({
-        device,
-        format: presentationFormat,
-    });
-
+// Create render pipeline for cube
+export async function createCube(device, pipelineLayout) {
+    
     // fetch shader code as a string
     const response = await fetch("cube.wgsl");
     if (!response.ok) {
@@ -156,108 +133,18 @@ async function main() {
             depthCompare: 'less',
             format: 'depth24plus',
         },
-        layout: 'auto'
+        layout: pipelineLayout
     };
 
     // create render pipeline 
     const renderPipeline = device.createRenderPipeline(pipelineDescriptor);
 
-    // create a depth texture 
-    const depthTexture = device.createTexture({
-        size: [canvas.width, canvas.height],
-        format: 'depth24plus',
-        usage: GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-
-    // create a GPURenderPassDescriptor object
-    const renderPassDescriptor = {
-        colorAttachments: [{
-          clearValue:  { r: 0.2, g: 0.2, b: 0.2, a: 1.0 },
-          loadOp: 'clear',
-          storeOp: 'store',
-          view: context.getCurrentTexture().createView()
-        }],
-        depthStencilAttachment: {
-            view: depthTexture.createView(),
-            depthClearValue: 1.0,
-            depthLoadOp: 'clear',
-            depthStoreOp: 'store',
-        },
+    // return pipeline and vertex count 
+    const cubeParams = {
+        pipeline: renderPipeline,
+        vertexBuffer: vertexBuffer,
+        count: vertices.length/6
     };
 
-    
-    // create uniform buffer to hold 4 x 4 MVP matrix
-    const uniformBufferSize = 64; // 16 elements * 4 byte float
-    const uniformBuffer = device.createBuffer({
-        size: uniformBufferSize,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    // create bind group using a GPUBindGroupDescriptor
-    const uniformBindGroup = device.createBindGroup({
-        layout: renderPipeline.getBindGroupLayout(0),
-        entries: [
-            {
-                binding: 0,
-                resource: {
-                    buffer: uniformBuffer,
-                },
-            },
-        ],
-    });
-
-    // create lookAt matrix
-    const eye = [1.1, 1.1, 1.1];
-    const target = [0, 0, 0];
-    const up = [0, 0, 1];
-    const lookAtMat = mat4.lookAt(eye, target, up);
-
-    // create projection matrix 
-    const aspect = canvas.width / canvas.height;
-    const projMat = mat4.perspective(
-        (2 * Math.PI) / 5, // 72 deg FOV
-        aspect,
-        1,
-        100.0
-    );
-    
-    // create modelview-projection matrix
-    const mvpMat = mat4.create();
-    mat4.multiply(projMat, lookAtMat, mvpMat);
-
-    // write uniform buffer to device 
-    device.queue.writeBuffer(
-        uniformBuffer,
-        0,
-        mvpMat.buffer,
-        mvpMat.byteOffset,
-        mvpMat.byteLength
-    );
-
-    // define render function 
-    function render() {
-        // make a command encoder to start encoding commands
-        const encoder = device.createCommandEncoder({ label: 'Cube encoder' });
-        // make a render pass encoder to encode render specific commands
-        const pass = encoder.beginRenderPass(renderPassDescriptor);
-        // set the render pipeline
-        pass.setPipeline(renderPipeline);
-        // set bind group
-        pass.setBindGroup(0, uniformBindGroup);
-        // set vertex buffer
-        pass.setVertexBuffer(0, vertexBuffer);
-        // draw
-        pass.draw(36, 5); 
-        // end render pass
-        pass.end();
-        // end commands 
-        const commandBuffer = encoder.finish();
-        // submit to GPU queue
-        device.queue.submit([commandBuffer]);
-    }
-
-    // call render function 
-    render();
+    return cubeParams;
 }
-
-// call main function 
-main();

@@ -8,7 +8,7 @@
 // ----------------------------------------------------------------------
 
 // imports from wgpu-matrix 
-import {vec3, mat4} from '../common/wgpu-matrix.module.js';
+import {vec3, mat4} from '../../../common/wgpu-matrix.module.js';
 
 // define bitwise flags for each of the six faces
 const Face = {

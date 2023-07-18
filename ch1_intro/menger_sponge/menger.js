@@ -8,7 +8,7 @@
 // ----------------------------------------------------------------------
 
 // imports from wgpu-matrix 
-import {vec3, mat4} from '../common/wgpu-matrix.module.js';
+import {vec3, mat4} from '../../common/wgpu-matrix.module.js';
 
 // *****************************************************************************
 // Create vertices for 6 faces of a cube, given the center and the side length

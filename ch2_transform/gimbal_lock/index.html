@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gimbal Lock Example</title>
+  <script type="module" src="cube.js"></script>
+</head>
+<body>
+
+  <h1>Gimbal Lock Demo</h1>
+  <div>
+    <div>
+        <label>Rx:</label> <input type="range" min="0" max="360" value="0" id="rx_slider">
+        <label id="rx_label">0</label>
+    </div>
+    <div>
+        <label>Ry:</label> <input type="range" min="0" max="360" value="0" id="ry_slider">
+        <label id="ry_label">0</label>
+    </div>
+    <div>
+        <label>Rz:</label> <input type="range" min="0" max="360" value="0" id="rz_slider">
+        <label id="rz_label">0</label>
+    </div>
+  </div>
+  <br/>
+  <div>
+    <span>
+        <input type="button" id="btn_clr" value="Reset All">
+    </span>
+  </div>
+  <br/>
+  <div>
+    <canvas id="webgpuCanvas" width="640" height="480"></canvas>
+  </div>
+
+</body>
+</html>

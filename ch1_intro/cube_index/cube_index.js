@@ -8,7 +8,7 @@
 // ----------------------------------------------------------------------
 
 // imports from wgpu-matrix 
-import {mat4} from '../common/wgpu-matrix.module.js';
+import {mat4} from '../../common/wgpu-matrix.module.js';
 
 // Create 8 vertices for  a cube, with center (0, 0, 0) and side 1.0
 function createCubeVertices() {

@@ -9,6 +9,7 @@
 
 // imports from wgpu-matrix 
 import {mat4} from '../../common/wgpu-matrix.module.js';
+import { createAxes } from './axis.js';
 
 // Create cube vertices 
 // Assuming unit cube centered at (0, 0, 0)
@@ -101,6 +102,21 @@ async function main() {
         code: shader_str,
     });
 
+    // create camera parameters bind group 
+    const cameraBindGroupLayout = device.createBindGroupLayout({
+        entries: [{
+            binding: 0, // mpvMat
+            visibility: GPUShaderStage.VERTEX,
+            buffer: {},
+        }]
+    });    
+    // create render pipeline layout
+    const pipelineLayout = device.createPipelineLayout({
+        bindGroupLayouts: [
+            cameraBindGroupLayout, // @group(0)
+        ]
+    });
+
     // get vertices
     const vertices = createCubeVertices();
     // create vertex buffer to store cube vertices 
@@ -156,11 +172,17 @@ async function main() {
             depthCompare: 'less',
             format: 'depth24plus',
         },
-        layout: 'auto'
+        layout: pipelineLayout
     };
 
     // create render pipeline 
     const renderPipeline = device.createRenderPipeline(pipelineDescriptor);
+
+    // create cube axes 
+    const axes_cube = await createAxes(device, pipelineLayout, 1.0);
+
+    // create static axes
+    const axes = await createAxes(device, pipelineLayout, 1.5);
 
     // create a depth texture 
     const depthTexture = device.createTexture({
@@ -188,75 +210,192 @@ async function main() {
     
     // create uniform buffer to hold 4 x 4 MVP matrix
     const uniformBufferSize = 64; // 16 elements * 4 byte float
-    const uniformBuffer = device.createBuffer({
+    const uniformBuffer1 = device.createBuffer({
         size: uniformBufferSize,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     // create bind group using a GPUBindGroupDescriptor
-    const uniformBindGroup = device.createBindGroup({
+    const uniformBindGroup1 = device.createBindGroup({
         layout: renderPipeline.getBindGroupLayout(0),
         entries: [
             {
                 binding: 0,
                 resource: {
-                    buffer: uniformBuffer,
+                    buffer: uniformBuffer1,
                 },
             },
         ],
     });
 
-    // create lookAt matrix
-    const eye = [1.1, 1.1, 1.1];
-    const target = [0, 0, 0];
-    const up = [0, 0, 1];
-    const lookAtMat = mat4.lookAt(eye, target, up);
+    // second 
+    const uniformBuffer2 = device.createBuffer({
+        size: uniformBufferSize,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    // create bind group using a GPUBindGroupDescriptor
+    const uniformBindGroup2 = device.createBindGroup({
+        layout: renderPipeline.getBindGroupLayout(0),
+        entries: [
+            {
+                binding: 0,
+                resource: {
+                    buffer: uniformBuffer2,
+                },
+            },
+        ],
+    });
 
-    // create projection matrix 
-    const aspect = canvas.width / canvas.height;
-    const projMat = mat4.perspective(
-        (2 * Math.PI) / 5, // 72 deg FOV
-        aspect,
-        1,
-        100.0
+    let Rx = 0.0;
+    let Ry = 0.0;
+    let Rz = 0.0;
+    let btn_clr = document.querySelector('#btn_clr');
+    btn_clr.addEventListener("click", () => {
+        document.querySelector('#rx_slider').value = 0;
+        document.querySelector('#ry_slider').value = 0;
+        document.querySelector('#rz_slider').value = 0;
+        document.querySelector("#rx_label").innerHTML = "0";
+        document.querySelector("#ry_label").innerHTML = "0";
+        document.querySelector("#rz_label").innerHTML = "0";
+        Rx = Ry = Rz = 0.0;
+        }
     );
-    
-    // create modelview-projection matrix
-    const mvpMat = mat4.create();
-    mat4.multiply(projMat, lookAtMat, mvpMat);
 
-    // write uniform buffer to device 
-    device.queue.writeBuffer(
-        uniformBuffer,
-        0,
-        mvpMat.buffer,
-        mvpMat.byteOffset,
-        mvpMat.byteLength
+    const rx_slider = document.querySelector("#rx_slider");
+    rx_slider.addEventListener("input", (event) => {
+        Rx = rx_slider.value;
+        document.querySelector("#rx_label").innerHTML = rx_slider.value;
+    }
     );
+
+    const ry_slider = document.querySelector("#ry_slider");
+    ry_slider.addEventListener("input", (event) => {
+        Ry = ry_slider.value;
+        document.querySelector("#ry_label").innerHTML = ry_slider.value;
+    }
+    );
+
+    const rz_slider = document.querySelector("#rz_slider");
+    rz_slider.addEventListener("input", (event) => {
+        Rz = rz_slider.value;
+        document.querySelector("#rz_label").innerHTML = rz_slider.value;
+    }
+    );
+
+
+    // Create and return modelview-projection matrix
+    function setMVPMatrix() {
+        // create projection matrix 
+        const aspect = canvas.width / canvas.height;
+        const projMat = mat4.perspective(
+            (2 * Math.PI) / 5, // FOV
+            aspect,
+            1,
+            100.0
+        );
+
+        // create lookAt matrix
+        const eye = [1.1, 1.1, 1.1];
+        const target = [0, 0, 0];
+        const up = [0, 0, 1];
+        let lookAtMat = mat4.lookAt(eye, target, up);
+
+        // set Euler rotation 
+        // Order: Rz * Ry * Rx * Pt
+        const deg2rad = Math.PI/180.0;
+        let rMat = mat4.identity();
+        mat4.rotateX(rMat, deg2rad * Rx, rMat);        
+        mat4.rotateY(rMat, deg2rad* Ry, rMat);
+        mat4.rotateZ(rMat, deg2rad* Rz, rMat);
+        mat4.mul(lookAtMat, rMat, lookAtMat);
+
+        // create modelview-projection matrix
+        let mvpMat = mat4.create();
+        mat4.multiply(projMat, lookAtMat, mvpMat);
+
+        // write uniform buffer to device 
+        device.queue.writeBuffer(
+            uniformBuffer1,
+            0,
+            mvpMat.buffer,
+            mvpMat.byteOffset,
+            mvpMat.byteLength
+        );
+
+        // unrotated matrix 
+        lookAtMat = mat4.lookAt(eye, target, up);
+        // create modelview-projection matrix
+        mvpMat = mat4.create();
+        mat4.multiply(projMat, lookAtMat, mvpMat);
+        // write uniform buffer to device 
+        device.queue.writeBuffer(
+            uniformBuffer2,
+            0,
+            mvpMat.buffer,
+            mvpMat.byteOffset,
+            mvpMat.byteLength
+        );
+    }
 
     // define render function 
     function render() {
+        // set matrices
+        setMVPMatrix();
+
+        // set texture 
+        renderPassDescriptor.colorAttachments[0].view = 
+            context.getCurrentTexture().createView();
+
         // make a command encoder to start encoding commands
         const encoder = device.createCommandEncoder({ label: 'Cube encoder' });
         // make a render pass encoder to encode render specific commands
         const pass = encoder.beginRenderPass(renderPassDescriptor);
+
+        // ********************
+        //  draw cube
+        // ********************
         // set the render pipeline
         pass.setPipeline(renderPipeline);
         // set bind group
-        pass.setBindGroup(0, uniformBindGroup);
+        pass.setBindGroup(0, uniformBindGroup1);
         // set vertex buffer
         pass.setVertexBuffer(0, vertexBuffer);
         // draw
         pass.draw(36, 5); 
+        // ********************
+        //  draw cube axes
+        // ********************
+        // set the render pipeline
+        pass.setPipeline(axes_cube.pipeline);
+        // set vertex buffer
+        pass.setVertexBuffer(0, axes_cube.vertexBuffer);
+        // draw
+        pass.draw(axes_cube.count); 
+
+        // ********************
+        //  draw static cube axes
+        // ********************
+        // set the render pipeline
+        pass.setPipeline(axes.pipeline);
+        // set bind group
+        pass.setBindGroup(0, uniformBindGroup2);
+        // set vertex buffer
+        pass.setVertexBuffer(0, axes.vertexBuffer);
+        // draw
+        pass.draw(axes.count); 
+
         // end render pass
         pass.end();
         // end commands 
         const commandBuffer = encoder.finish();
         // submit to GPU queue
         device.queue.submit([commandBuffer]);
+
+        // request animation
+        requestAnimationFrame(render);
     }
 
-    // call render function 
-    render();
+    // request animation
+    requestAnimationFrame(render);
 }
 
 // call main function 
