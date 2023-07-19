@@ -53,7 +53,10 @@ body {
     border-radius: 8px;
   }
 
-
+#preorder_btn:hover {
+    background-color:#00ab00;
+    transition: 0.7s;
+}
 /* electronut.in */
 
 .pp-promo {
