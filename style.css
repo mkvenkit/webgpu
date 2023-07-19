@@ -17,9 +17,9 @@ body {
 	font-size: 1.25em;
 	line-height: 1.1em;
 	color: #fff;
-	background: #222222 url(/i/newdrop.png) repeat-x bottom;
-	padding: 1.1em 1.1em 2.2em 1.1em;
-	margin:0 0 2.2em 0;
+	background-color: #222222;
+	padding: 1.1em 1.1em 1.1em 1.1em;
+	margin:0 0 0 0;
 }
 
 #main {
