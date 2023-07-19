@@ -22,9 +22,16 @@ body {
 	margin:0 0 0 0;
 }
 
+#supp {
+	margin-left:60%;
+    padding: 0 11.8%;
+    padding-top: 1em;
+    position: absolute;
+	display:block;
+}
 #main {
 
-	width:61.8%;
+	width:60%;
 	float:left;
     padding: 1.1em 1.1em 2.2em 1.1em;
 	margin:0 0 2.2em 0;
@@ -33,6 +40,18 @@ body {
 #auth {
     font-size: 0.75em;
 }
+
+#preorder_btn {
+    background-color: #222222; /* Green */
+    border: none;
+    color: white;
+    padding: 10px 20px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 14px;
+    border-radius: 8px;
+  }
 
 
 /* electronut.in */
