@@ -33,3 +33,53 @@ body {
 #auth {
     font-size: 0.75em;
 }
+
+
+/* electronut.in */
+
+.pp-promo {
+    border: 2px solid gray;
+    padding: 10px;
+    border-radius: 10px; 
+  }
+  
+  .art-summary {
+    padding: 10px;
+    height: 150px;
+  }
+  
+  .art-img {
+    float: left;
+    padding: 4px;
+    text-align: center; 
+    margin: 2px;
+  }
+  
+  .art-txt {
+    padding: 4px;
+  }
+  
+  td.art-img-cell {
+    width: 65px;
+  }
+  
+  td.art-txt-cell {
+    vertical-align: top;
+  }
+  
+  .art-title {
+    padding-top: 4px;
+    padding-left: 10px;
+    font: bold 14px Georgia, serif;
+  }
+  
+  .art-desc {
+    padding-top: 4px;
+    padding-left: 10px;
+  }
+  
+  .art-date {
+    padding-top: 4px;
+    padding-left: 10px;
+    font: italic 14px Georgia, serif;
+  }
