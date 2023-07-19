@@ -21,3 +21,14 @@ body {
 	padding: 1.1em 1.1em 2.2em 1.1em;
 	margin:0 0 2.2em 0;
 }
+
+#main {
+
+	width:61.8%;
+
+	float:left;
+}
+
+#auth {
+    font-size: 0.75em;
+}
