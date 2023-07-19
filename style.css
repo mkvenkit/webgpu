@@ -1,0 +1,23 @@
+body {
+	margin:0;
+	padding:0;
+	color: #000;
+	background: #fff8e5;
+	font-family: "Premiera", "Cambria", "Roboto Slab", "Georgia", "Times New Roman", serif;
+	font-size: 100%;
+	text-rendering: optimizeLegibility;
+	-moz-font-feature-settings:"onum" 1;
+	-ms-font-feature-settings:"onum" 1;
+	-o-font-feature-settings:"onum" 1;
+	-webkit-font-feature-settings:"onum" 1;
+	font-feature-settings:"onum" 1;
+}
+
+#header {
+	font-size: 1.25em;
+	line-height: 1.1em;
+	color: #fff;
+	background: #400300 url(/i/newdrop.png) repeat-x bottom;
+	padding: 1.1em 1.1em 2.2em 1.1em;
+	margin:0 0 2.2em 0;
+}
