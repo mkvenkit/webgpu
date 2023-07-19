@@ -17,7 +17,7 @@ body {
 	font-size: 1.25em;
 	line-height: 1.1em;
 	color: #fff;
-	background: #400300 url(/i/newdrop.png) repeat-x bottom;
+	background: #222222 url(/i/newdrop.png) repeat-x bottom;
 	padding: 1.1em 1.1em 2.2em 1.1em;
 	margin:0 0 2.2em 0;
 }
@@ -25,8 +25,9 @@ body {
 #main {
 
 	width:61.8%;
-
 	float:left;
+    padding: 1.1em 1.1em 2.2em 1.1em;
+	margin:0 0 2.2em 0;
 }
 
 #auth {
