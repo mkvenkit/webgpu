@@ -148,9 +148,9 @@ async function main() {
     };
 
     // default colors
-    let def_col_torus = '#ffff00';
+    let def_col_torus = '#ff0000';
     let def_col_plane = '#0000ff'
-    let def_col_spot = '#ffffff'
+    let def_col_spot = '#00ff00'
 
     let col_torus = hexStrToRGBFloat(def_col_torus);
     let col_plane = hexStrToRGBFloat(def_col_plane);
