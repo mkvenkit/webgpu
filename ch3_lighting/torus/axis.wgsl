@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------
 // axis.wgsl
 // 
-// Shaders for the XYZ exes
+// Shaders for the XYZ axis
 // 
 // Author: Mahesh Venkitachalam
 // 
@@ -9,10 +9,8 @@
 
 // define a struct to hold camera parameters
 struct Camera {
-    modelMat: mat4x4<f32>,
     lookAtMat: mat4x4<f32>,
     projMat: mat4x4<f32>,
-    nMat: mat4x4<f32>
 }
 
 // define uniform to hold mvp matrix

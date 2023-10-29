@@ -12,8 +12,8 @@ function createTorusVertices(r, R) {
     // array to store vertices
     let vert = [];
     // discretize torus
-    const NU = 30;
-    const NV = 20;
+    const NU = 60;
+    const NV = 60;
     const du = 2 * Math.PI / NU;
     const dv = 2 * Math.PI / NV;
     let u = 0;
@@ -134,15 +134,15 @@ export async function createTorus(r, R, device) {
     const renderPipeline = device.createRenderPipeline(pipelineDescriptor);
 
     // create uniform buffer to camera params
-    const uniformBufferSize = 272; // 16*4 * 4 + 4 = 260 -> 272
+    const cameraBufferSize = 272; // 16*4 * 4 + 4 = 260 -> 272
     // create buffer 
-    let uniformBuffer = device.createBuffer({
-        size: uniformBufferSize,
+    let cameraBuffer = device.createBuffer({
+        size: cameraBufferSize,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
     // create uniform buffer for lighting params
-    const lightingBufferSize = 96; 
+    const lightingBufferSize = 64; // 60 -> 64
     // create buffer 
     let lightingBuffer = device.createBuffer({
         size: lightingBufferSize,
@@ -156,7 +156,7 @@ export async function createTorus(r, R, device) {
             {
                 binding: 0,
                 resource: {
-                    buffer: uniformBuffer,
+                    buffer: cameraBuffer,
                 },
             },
             {
@@ -173,7 +173,7 @@ export async function createTorus(r, R, device) {
         pipeline: renderPipeline,
         vertexBuffer: vertexBuffer,
         count: vertices.length/6,
-        uniformBuffer: uniformBuffer,
+        cameraBuffer: cameraBuffer,
         lightingBuffer: lightingBuffer,
         uniformBindGroup: uniformBindGroup,
     };

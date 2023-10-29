@@ -21,7 +21,7 @@ function createPlaneVertices(side) {
 }
 
 // Create render pipeline for axes
-export async function createPlane(side, device, pipelineLayout) {
+export async function createPlane(side, device) {
     
     // fetch shader code as a string
     const response = await fetch("phong.wgsl");
@@ -92,17 +92,17 @@ export async function createPlane(side, device, pipelineLayout) {
             depthCompare: 'less',
             format: 'depth24plus',
         },
-        layout: pipelineLayout
+        layout: 'auto'
     };
 
     // create render pipeline 
     const renderPipeline = device.createRenderPipeline(pipelineDescriptor);
 
     // create uniform buffer to camera params
-    const uniformBufferSize = 272; // 16*4 * 4 + 4 = 260 -> 272
+    const cameraBufferSize = 272; // 16*4 * 4 + 4 = 260 -> 272
     // create buffer 
-    let uniformBuffer = device.createBuffer({
-        size: uniformBufferSize,
+    let cameraBuffer = device.createBuffer({
+        size: cameraBufferSize,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -121,7 +121,7 @@ export async function createPlane(side, device, pipelineLayout) {
             {
                 binding: 0,
                 resource: {
-                    buffer: uniformBuffer,
+                    buffer: cameraBuffer,
                 },
             },
             {
@@ -138,7 +138,7 @@ export async function createPlane(side, device, pipelineLayout) {
         pipeline: renderPipeline,
         vertexBuffer: vertexBuffer,
         count: vertices.length/6,
-        uniformBuffer: uniformBuffer,
+        cameraBuffer: cameraBuffer,
         lightingBuffer: lightingBuffer,
         uniformBindGroup: uniformBindGroup,
     };

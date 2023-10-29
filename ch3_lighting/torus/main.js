@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------
 // main.js
 // 
-// Main JavaScript file for the Cubes on a Toroidal Helix WebGPU example.
+// Main JavaScript file for the Torus using Phong Reflection model example.
 // 
 // Author: Mahesh Venkitachalam
 // 
@@ -43,49 +43,66 @@ function hexStrToRGBFloat(hex) {
 // write matrices 
 function writeMatrices(device, buffer, modelMat, lookAtMat, projMat, nMat, timeStep) {
 
+    let offset = 0;
+
     // write modelMat
-    device.queue.writeBuffer(
-        buffer,
-        0,
-        modelMat.buffer,
-        modelMat.byteOffset,
-        modelMat.byteLength
-    );
+    if (modelMat) {
+        device.queue.writeBuffer(
+            buffer,
+            offset,
+            modelMat.buffer,
+            modelMat.byteOffset,
+            modelMat.byteLength
+        );
+        offset += modelMat.byteLength;
+    }
+
     // write lookAtMat
-    device.queue.writeBuffer(
-        buffer,
-        modelMat.byteLength,
-        lookAtMat.buffer,
-        lookAtMat.byteOffset,
-        lookAtMat.byteLength
-    );
+    if (lookAtMat) {
+        device.queue.writeBuffer(
+            buffer,
+            offset,
+            lookAtMat.buffer,
+            lookAtMat.byteOffset,
+            lookAtMat.byteLength
+        );
+        offset += lookAtMat.byteLength;
+    }
 
     // write projMat
-    device.queue.writeBuffer(
-        buffer,
-        modelMat.byteLength + lookAtMat.byteLength,
-        projMat.buffer,
-        projMat.byteOffset,
-        projMat.byteLength
-    );
+    if (projMat) {
+        device.queue.writeBuffer(
+            buffer,
+            offset,
+            projMat.buffer,
+            projMat.byteOffset,
+            projMat.byteLength
+        );
+        offset += projMat.byteLength;
+    }
 
     // write nMat
-    device.queue.writeBuffer(
-        buffer,
-        modelMat.byteLength + lookAtMat.byteLength + projMat.byteLength,
-        nMat.buffer,
-        nMat.byteOffset,
-        nMat.byteLength
-    );
+    if (nMat) {
+        device.queue.writeBuffer(
+            buffer,
+            offset,
+            nMat.buffer,
+            nMat.byteOffset,
+            nMat.byteLength
+        );
+        offset += nMat.byteLength;
+    }
 
     // write timeStep
-    device.queue.writeBuffer(
-        buffer,
-        modelMat.byteLength + lookAtMat.byteLength + projMat.byteLength + nMat.byteLength,
-        new Float32Array([timeStep]),
-        0,
-        1
-    );
+    if (timeStep) {
+        device.queue.writeBuffer(
+            buffer,
+            offset,
+            new Float32Array([timeStep]),
+            0,
+            1
+        );
+    }
 }
 
 
@@ -118,10 +135,10 @@ async function main() {
     const torus = await createTorus(r, R, device);
 
     // create plane
-    const plane = await createPlane(26, device, 'auto');
+    const plane = await createPlane(26, device);
 
     // create XYX axes
-    const axis = await createAxes(20, device, 'auto');
+    const axis = await createAxes(20, device);
 
     // create a depth texture 
     const depthTexture = device.createTexture({
@@ -220,30 +237,32 @@ async function main() {
 
     // umbra
     const def_umbra = 30.0;
-    const umbra = new Float32Array([30.0]);
+    let umbra = 30.0;
     const umbra_slider = document.querySelector("#umbra_slider");
     const umbra_label = document.querySelector("#umbra_label");
     umbra_slider.value = def_umbra;
     umbra_label.innerHTML = def_umbra;
     umbra_slider.addEventListener("input", (event) => {
-        umbra[0] = umbra_slider.value;
+        umbra = umbra_slider.value;
         umbra_label.innerHTML = umbra_slider.value;
     }
     );
 
     // penumbra
-    const def_penumbra = 20.0;
-    const penumbra = new Float32Array([20.0]);
+    const def_penumbra = 25;
+    let penumbra = 25;
     const penumbra_slider = document.querySelector("#penumbra_slider");
     const penumbra_label = document.querySelector("#penumbra_label");
     penumbra_slider.value = def_penumbra;
     penumbra_label.innerHTML = def_penumbra;
     penumbra_slider.addEventListener("input", (event) => {
-        penumbra[0] = penumbra_slider.value;
+        penumbra = penumbra_slider.value;
         penumbra_label.innerHTML = penumbra_slider.value;
     }
     );
 
+    let cos_theta_o = Math.cos(umbra * Math.PI/180.0);
+    let cos_theta_i = Math.cos((1 - penumbra/100.0) * umbra * Math.PI/180.0);
 
     // init show flags 
     let showTorus = document.querySelector('#show_torus').checked;
@@ -262,7 +281,7 @@ async function main() {
         const eye = [12, 0, 12];
         const target = [0, 0, 0];
         const up = [0, 0, 1];
-        const fov = 90;
+        const fov = 100;
         let aspect = canvas.width / canvas.height;
 
         let lookAtMat = mat4.lookAt(eye, target, up);
@@ -295,9 +314,9 @@ async function main() {
         nMat = mat4.transpose(mat4.inverse(mvMat));
     
         // write matrices to GPU
-        writeMatrices(device, torus.uniformBuffer, modelMat, lookAtMat, projMat, nMat, timeStep);
-        writeMatrices(device, plane.uniformBuffer, modelMat, lookAtMat, projMat, nMat, timeStep);
-        writeMatrices(device, axis.uniformBuffer, modelMat, lookAtMat, projMat, nMat, timeStep);
+        writeMatrices(device, torus.cameraBuffer, modelMat, lookAtMat, projMat, nMat, timeStep);
+        writeMatrices(device, plane.cameraBuffer, modelMat, lookAtMat, projMat, nMat, timeStep);
+        writeMatrices(device, axis.cameraBuffer, null, lookAtMat, projMat, null, null);
 
     }
     
@@ -386,12 +405,15 @@ async function main() {
                 1
             );
 
+            cos_theta_o = Math.cos(umbra * Math.PI/180.0);
+            cos_theta_i = Math.cos((1 - penumbra/100.0) * umbra * Math.PI/180.0);
+                            
             // umbra 
             offset += 4;
             device.queue.writeBuffer(
                 obj.lightingBuffer,
                 offset,
-                umbra,
+                new Float32Array([cos_theta_o]),
                 0,
                 1
             );
@@ -401,7 +423,7 @@ async function main() {
             device.queue.writeBuffer(
                 obj.lightingBuffer,
                 offset,
-                penumbra,
+                new Float32Array([cos_theta_i]),
                 0,
                 1
             );

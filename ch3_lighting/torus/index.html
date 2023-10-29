@@ -3,163 +3,151 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Torus Phong Lighting Model Example</title>
+  <title>Torus Phong Reflection Model Example</title>
   <script type="module" src="main.js"></script>
   <style>
-    * {
-      box-sizing: border-box;
-    }
-    
-    /* Create two equal columns that floats next to each other */
+    /* Create two columns that float next to each other */
     .column1 {
       float: left;
-      /*background-color: aqua;*/
     }
-
     .column2 {
       float: left;
-      margin-left: 4px;;
+      margin-left: 4px;
       background-color: #afafafaf;
       border: solid;
     }
-    
-    /* Clear floats after the columns */
-    .row:after {
-      content: "";
-      display: table;
-      clear: both;
-    }
-    </style>
+  </style>
 </head>
 <body>
   <div>
     <h2>
-      Torus using Phong Lighting Model
+      Torus using Phong Reflection Model
     </h2>
   </div>
-  <div class="row">
-    <div class="column1"> 
-      <canvas id="webgpuCanvas" width="800" height="650"></canvas>
+  
+  <div class="column1"> 
+    <canvas id="webgpuCanvas" width="800" height="650"></canvas>
+  </div>
+
+  <div class="column2"> 
+    <div>
+      <input type="checkbox" id="rotate">
+      <label>Rotate</label>
     </div>
-    <div class="column2"> 
+    <div>
+      <input type="checkbox" id="show_torus" checked>
+      <label>Show Torus</label>
+    </div>
+    <div>
+      <input type="checkbox" id="show_plane" checked> 
+      <label>Show Plane</label>
+    </div>
+    <div>
+      <input type="checkbox" id="show_axis" checked>
+      <label>Show Axis</label>
+    </div>
+    <hr/>
+    
+    <fieldset>
+      <legend>Material</legend>
       <div>
-        <input type="checkbox" id="rotate">
-        <label for="rotate">Rotate</label>
+        <input type="color" id="mat_col_torus" name="head" value="#ffff00" />
+        <label>Torus</label>
       </div>
       <div>
-        <input type="checkbox" id="show_torus" checked>
-        <label>Show Torus</label>
+        <input type="color" id="mat_col_plane" name="head" value="#00ff00" />
+        <label>Plane</label>
       </div>
-      <div>
-        <input type="checkbox" id="show_plane" checked> 
-        <label>Show Plane</label>
-      </div>
-      <div>
-        <input type="checkbox" id="show_axis" checked>
-        <label>Show Axis</label>
-      </div>
-      <hr/>
+    </fieldset>
+    <hr/>
+
+    <fieldset>
+      <legend>Point Light</legend>
       
       <fieldset>
-        <legend>Material</legend>
+        <legend>Position</legend>
         <div>
-          <input type="color" id="mat_col_torus" name="head" value="#ffff00" />
-          <label for="mat_color">Torus</label>
+          <label>X</label> <input type="range" min="0" max="20" value="0" id="x_slider">
+          <label id="x_label">0</label>
         </div>
         <div>
-          <input type="color" id="mat_col_plane" name="head" value="#00ff00" />
-          <label for="mat_color">Plane</label>
+          <label>Y</label> <input type="range" min="0" max="20" value="0" id="y_slider">
+          <label id="y_label">0</label>
+        </div>
+        <div>
+          <label>Z</label> <input type="range" min="0" max="20" value="0" id="z_slider">
+          <label id="z_label">0</label>
         </div>
       </fieldset>
-      <hr/>
-      <fieldset>
-        <legend>Point Light</legend>
 
-        <fieldset>
-          <legend>Position</legend>
-          <div>
-            <label>X</label> <input type="range" min="0" max="20" value="0" id="x_slider">
-            <label id="x_label">0</label>
-          </div>
-          <div>
-            <label>Y</label> <input type="range" min="0" max="20" value="0" id="y_slider">
-            <label id="y_label">0</label>
-          </div>
-          <div>
-            <label>Z</label> <input type="range" min="0" max="20" value="0" id="z_slider">
-            <label id="z_label">0</label>
-          </div>
-        </fieldset>
+      <div>
+        <input type="checkbox" id="pl_enable" checked>
+        <label>Enable</label>
+      </div>
 
-        <div>
-          <input type="checkbox" id="pl_enable" checked>
-          <label>Enable</label>
-        </div>
+      <div>
+        <input type="checkbox" id="pl_directional">
+        <label>Directional</label>
+      </div>
 
-        <div>
-          <input type="checkbox" id="pl_directional">
-          <label>Directional</label>
-        </div>
+      <div>
+        <input type="checkbox" id="pl_attenuate">
+        <label>Attenutate</label>
+      </div>
 
-        <div>
-          <input type="checkbox" id="pl_attenuate">
-          <label for="attenutate">Attenutate</label>
-        </div>
+      <div>
+        <input type="checkbox" id="pl_ambient" checked>
+        <label">Ambient</label>
+      </div>
 
-        <div>
-          <input type="checkbox" id="pl_ambient" checked>
-          <label">Ambient</label>
-        </div>
+      <div>
+        <input type="checkbox" id="pl_diffuse" checked>
+        <label">Diffuse</label>
+      </div>
 
-        <div>
-          <input type="checkbox" id="pl_diffuse" checked>
-          <label">Diffuse</label>
-        </div>
+      <div>
+        <input type="checkbox" id="pl_specular" checked>
+        <label">Specular</label>
+      </div>
 
-        <div>
-          <input type="checkbox" id="pl_specular" checked>
-          <label">Specular</label>
-        </div>
+      <div>
+        <input type="checkbox" id="pl_blinn_phong">
+        <label">Blinn-Phong</label>
+      </div>
 
-        <div>
-          <input type="checkbox" id="pl_blinn_phong">
-          <label">Blinn-Phong</label>
-        </div>
+    </fieldset>
+    
+    <hr/>
 
-      </fieldset>
-      
-      <hr/>
+    <fieldset>
+      <legend>Spot Light</legend>
 
-      <fieldset>
-        <legend>Spot Light</legend>
+      <div>
+        <input type="checkbox" id="sl_enable" checked>
+        <label>Enable</label>
+      </div>
 
-        <div>
-          <input type="checkbox" id="sl_enable" checked>
-          <label>Enable</label>
-        </div>
+      <div>
+        <input type="checkbox" id="sl_oscillate" checked>
+        <label>Oscillate</label>
+      </div>
 
-        <div>
-          <input type="checkbox" id="sl_oscillate" checked>
-          <label>Oscillate</label>
-        </div>
+      <div>
+        <input type="color" id="spot_col" name="head" value="#ffff00" />
+        <label>Color</label>
+      </div>
 
-        <div>
-          <input type="color" id="spot_col" name="head" value="#ffff00" />
-          <label>Color</label>
-        </div>
+      <div>
+        <label>Outer cone (&deg;)</label> <input type="range" min="0" max="85" value="0" id="umbra_slider">
+        <label id="umbra_label">0</label>
+      </div>
 
-        <div>
-          <label>Umbra</label> <input type="range" min="0" max="85" value="0" id="umbra_slider">
-          <label id="umbra_label">0</label>
-        </div>
+      <div>
+        <label>Inner cone (%)</label> <input type="range" min="0" max="100" value="0" id="penumbra_slider">
+        <label id="penumbra_label">25</label>
+      </div>
 
-        <div>
-          <label>Penumbra</label> <input type="range" min="0" max="85" value="0" id="penumbra_slider">
-          <label id="penumbra_label">0</label>
-        </div>
-
-      </fieldset>
-    </div>
+    </fieldset>
   </div>
 </body>
 </html>
