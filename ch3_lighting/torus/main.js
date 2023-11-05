@@ -9,11 +9,11 @@
 
 // imports from wgpu-matrix 
 import {vec3, mat4} from '../../common/wgpu-matrix.module.js';
-import { createAxes } from './axis.js';
-import {createPlane} from './plane.js'
 
 // other imports
-import { createTorus } from './torus.js';
+import {createTorus } from './torus.js';
+import {createAxes } from './axis.js';
+import {createPlane} from './plane.js'
 
 // flags for lighting UI
 const LightingFlags = {
@@ -173,7 +173,7 @@ async function main() {
     let col_plane = hexStrToRGBFloat(def_col_plane);
     let col_spot = hexStrToRGBFloat(def_col_spot);
 
-    function updateFirst(event) {
+    function updateCols(event) {
         if (event.target.id == "mat_col_torus") {
             col_torus = hexStrToRGBFloat(event.target.value);
         }
@@ -189,19 +189,19 @@ async function main() {
     // color picker for torus
     const colorPickerTorus = document.querySelector("#mat_col_torus");
     colorPickerTorus.value = def_col_torus;
-    colorPickerTorus.addEventListener("input", updateFirst, false);
+    colorPickerTorus.addEventListener("input", updateCols);
     colorPickerTorus.select();
 
     // color picker for plane
     const colorPickerPlane = document.querySelector("#mat_col_plane");
     colorPickerPlane.value = def_col_plane;
-    colorPickerPlane.addEventListener("input", updateFirst, false);
+    colorPickerPlane.addEventListener("input", updateCols);
     colorPickerPlane.select();
 
     // color picker for spot light
     const colorPickerSpot = document.querySelector("#spot_col");
     colorPickerSpot.value = def_col_spot;
-    colorPickerSpot.addEventListener("input", updateFirst, false);
+    colorPickerSpot.addEventListener("input", updateCols);
     colorPickerSpot.select();
 
     // Point light position sliders:
@@ -235,34 +235,29 @@ async function main() {
     }
     );
 
-    // umbra
-    const def_umbra = 30.0;
-    let umbra = 30.0;
-    const umbra_slider = document.querySelector("#umbra_slider");
-    const umbra_label = document.querySelector("#umbra_label");
-    umbra_slider.value = def_umbra;
-    umbra_label.innerHTML = def_umbra;
-    umbra_slider.addEventListener("input", (event) => {
-        umbra = umbra_slider.value;
-        umbra_label.innerHTML = umbra_slider.value;
+    // outer cone
+    let outerCone = 30.0;
+    const outer_cone_slider = document.querySelector("#outer_cone_slider");
+    const outer_cone_label = document.querySelector("#outer_cone_label");
+    outer_cone_slider.value = outerCone;
+    outer_cone_label.innerHTML = outerCone;
+    outer_cone_slider.addEventListener("input", (event) => {
+        outerCone = outer_cone_slider.value;
+        outer_cone_label.innerHTML = outer_cone_slider.value;
     }
     );
 
-    // penumbra
-    const def_penumbra = 25;
-    let penumbra = 25;
-    const penumbra_slider = document.querySelector("#penumbra_slider");
-    const penumbra_label = document.querySelector("#penumbra_label");
-    penumbra_slider.value = def_penumbra;
-    penumbra_label.innerHTML = def_penumbra;
-    penumbra_slider.addEventListener("input", (event) => {
-        penumbra = penumbra_slider.value;
-        penumbra_label.innerHTML = penumbra_slider.value;
+    // inner cone
+    let innerConePercent = 25;
+    const inner_cone_slider = document.querySelector("#inner_cone_slider");
+    const inner_cone_label = document.querySelector("#inner_cone_label");
+    inner_cone_slider.value = innerConePercent;
+    inner_cone_label.innerHTML = innerConePercent;
+    inner_cone_slider.addEventListener("input", (event) => {
+        innerConePercent = inner_cone_slider.value;
+        inner_cone_label.innerHTML = inner_cone_slider.value;
     }
     );
-
-    let cos_theta_o = Math.cos(umbra * Math.PI/180.0);
-    let cos_theta_i = Math.cos((1 - penumbra/100.0) * umbra * Math.PI/180.0);
 
     // init show flags 
     let showTorus = document.querySelector('#show_torus').checked;
@@ -274,7 +269,6 @@ async function main() {
     let now = 0;
 
     // Update camera parameters 
-    // viewportID is the viewport number (0/1)
     function updateCamera() {
     
         // create lookAt matrix
@@ -292,9 +286,6 @@ async function main() {
             1,
             100
         );
-
-        //let a = 15;
-        //projMat = mat4.ortho(-a, a, -a/aspect, a/aspect, 1, 100);
 
         // Is rotate checked?
         let rotate = document.querySelector('#rotate').checked;
@@ -405,10 +396,10 @@ async function main() {
                 1
             );
 
-            cos_theta_o = Math.cos(umbra * Math.PI/180.0);
-            cos_theta_i = Math.cos((1 - penumbra/100.0) * umbra * Math.PI/180.0);
+            var cos_theta_o = Math.cos(outerCone * Math.PI/180.0);
+            var cos_theta_i = Math.cos((1 - innerConePercent/100.0) * outerCone * Math.PI/180.0);
                             
-            // umbra 
+            // outer cone 
             offset += 4;
             device.queue.writeBuffer(
                 obj.lightingBuffer,
@@ -418,7 +409,7 @@ async function main() {
                 1
             );
 
-            // penumbra 
+            // inner cone 
             offset += 4;
             device.queue.writeBuffer(
                 obj.lightingBuffer,
@@ -439,8 +430,6 @@ async function main() {
 
     // define render function 
     function render() {
-        // increment time step
-        timeStep += 1;
 
         // set texture 
         renderPassDescriptor.colorAttachments[0].view = 
@@ -450,6 +439,9 @@ async function main() {
         const encoder = device.createCommandEncoder({ label: 'torus encoder' });
         // make a render pass encoder to encode render specific commands
         const pass = encoder.beginRenderPass(renderPassDescriptor);
+
+        // increment time step
+        timeStep += 1;
 
         // update camera params for frame
         updateCamera();
