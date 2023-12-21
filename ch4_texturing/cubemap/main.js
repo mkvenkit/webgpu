@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------
-// plane.js
+// main.js
 // 
-// Testing specular relfections
+// Cube mapping demo
 // 
 // Author: Mahesh Venkitachalam
 // 
