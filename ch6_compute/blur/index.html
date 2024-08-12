@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gaussian Blur with Computer Shaders</title>
+  <script type="module" src="main.js"></script>
+  <style>
+    /* Create two columns that float next to each other */
+    .column1 {
+      float: left;
+    }
+    .column2 {
+      float: left;
+      margin-left: 4px;
+      background-color: #afafafaf;
+      border: solid;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <h2>
+      Gaussian Blur with Computer Shaders
+    </h2>
+  </div>
+  
+  <div class="column1"> 
+    <canvas id="webgpuCanvas" width="800" height="800"></canvas>
+  </div>
+
+  <div class="column2"> 
+    <div>
+      <input type="checkbox" id="apply_blur">
+      <label>Apply Blur</label>
+    </div>
+    <div>
+      <input type="checkbox" id="optimize" checked>
+      <label>Optimize</label>
+    </div>
+    <hr/>
+    <fieldset>
+      <legend>Blur Parameters</legend>
+      <div>
+        <label>Radius:</label> <input type="range" min="1" max="20" value="1" id="r_slider">
+        <label id="r_label">1</label>
+      </div>
+      <div>
+        <label>Sigma: </label> <input type="range" min="1" max="10" value="1" id="s_slider">
+        <label id="s_label">1</label>
+      </div>
+      <div>
+        <label>Iteration: </label> <input type="range" min="1" max="20" value="1" id="i_slider">
+        <label id="i_label">1</label>
+      </div>
+    </fieldset>
+    <hr/>
+    <fieldset>
+      <legend>GPU Timings (us)</legend>
+      <div>
+        Render: <label id="render_label">1</label>
+      </div>
+      <div>
+        Compute: <label id="compute_label">1</label>
+      </div>
+    </fieldset>
+  </div>
+</body>
+</html>
