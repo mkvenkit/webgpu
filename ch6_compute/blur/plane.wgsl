@@ -7,20 +7,12 @@
 // 
 // ----------------------------------------------------------------------
 
-// struct to hold camera params
-struct Camera
-{
-    mvMat: mat4x4<f32>,
-    projMat: mat4x4<f32>,
-    timeStep: f32,
-}
-
-// define uniform to hold mvp matrix
+// define uniforms
 @group(0) @binding(0) var<uniform> imageScale: vec4f;
 @group(0) @binding(1) var mySampler: sampler;
 @group(0) @binding(2) var texImage: texture_2d<f32>;
 
-// define a struct to hold vertex and color 
+// define a struct for vertex shader output
 struct VertexOut {
     @builtin(position) position: vec4f,
     @location(0) uv : vec2f,

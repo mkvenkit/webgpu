@@ -56,12 +56,16 @@
     </fieldset>
     <hr/>
     <fieldset>
-      <legend>GPU Timings (us)</legend>
+      <legend>GPU Load</legend>
       <div>
-        Render: <label id="render_label">1</label>
+        <input type="checkbox" id="enable_timing">
+        <label>Enable Timing</label>
       </div>
       <div>
-        Compute: <label id="compute_label">1</label>
+        Render: <label id="render_label">0</label> us
+      </div>
+      <div>
+        Compute: <label id="compute_label">0</label> us
       </div>
     </fieldset>
   </div>
