@@ -130,15 +130,12 @@ async function main() {
 
     // create compute pipeline
     const hadp = await createComputePipeline(device, vecLength);
-
-    // create a compute pass descriptor
-    const computePassDescriptor = {};
    
     // make a command encoder to start encoding commands
     const encoder = device.createCommandEncoder({ label: 'Hadp encoder' });
 
-    // begin compute pass
-    const computePass = encoder.beginComputePass(computePassDescriptor);
+    // begin compute pass - passing in empty compute pass descriptor
+    const computePass = encoder.beginComputePass({});
 
     computePass.setPipeline(hadp.pipeline);
     computePass.setBindGroup(0, hadp.bindgroup);
@@ -149,12 +146,12 @@ async function main() {
 
     // copy buffer
     encoder.copyBufferToBuffer(
-        hadp.cBuffer /* source buffer */,
-        0 /* source offset */,
-        hadp.rBuffer /* destination buffer */,
-        0 /* destination offset */,
-        vecLength * Float32Array.BYTES_PER_ELEMENT
-        );
+        hadp.cBuffer,                                // source buffer
+        0,                                           // source offset
+        hadp.rBuffer,                                // destination buffer
+        0,                                           // destination offset
+        vecLength * Float32Array.BYTES_PER_ELEMENT,  // number of bytes
+    );
 
     // end commands 
     const commandBuffer = encoder.finish();

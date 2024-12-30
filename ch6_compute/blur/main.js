@@ -7,10 +7,10 @@
 // 
 // ----------------------------------------------------------------------
 
-// Create render pipeline for plane 
-async function createPlane(device, side) {
+// create and return shader module  
+async function createShaderModule(device, fileName) {
     // fetch shader code as a string
-    let response = await fetch("plane.wgsl");
+    let response = await fetch(fileName);
     if (!response.ok) {
         alert(`fetch: HTTP error! status: ${response.status}`);
         return;
@@ -18,10 +18,17 @@ async function createPlane(device, side) {
     const shader_str = await response.text();
     
     // create shader module
-    const shaderModule = device.createShaderModule({
-        label: 'plane shader',
+    return device.createShaderModule({
+        label: fileName + ' shader module',
         code: shader_str,
     });
+}
+
+// Create render pipeline for plane 
+async function createPlane(device) {
+
+    // create shader module
+    const shaderModule = await createShaderModule(device, 'plane.wgsl');
 
     // create a GPURenderPipelineDescriptor object
     const pipelineDescriptor = {
@@ -68,81 +75,32 @@ function updateBlurParams(device, blur, R, sigma) {
     const buf_weights = new Float32Array(weights_norm);
     //console.log(weights_norm);
 
-    // create uniform buffers for blur radius 
-    const buffersR = [0, 1].map(()=> {
-        return device.createBuffer({
-            size: 4, // i32 - 4 bytes
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-    });
-    // write blur radius to buffers
-    buffersR.map((buf)=>{
-        device.queue.writeBuffer(
-            buf,
-            0,
-            new Int32Array([R]),
-            0,
-            1
-        );
-    });
-
     // create storage buffers for weights 
     const bufSize = Math.ceil((4 * weights_norm.length) / 16) * 16;  // 4 x len -> 16 bytes
-    const buffersW = [0, 1].map(()=> {
-        return device.createBuffer({
+    const buffersW = device.createBuffer({
             size: bufSize,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
-    });
     // write weights to buffers
-    buffersW.map((buf)=>{
-        device.queue.writeBuffer(
-            buf,
-            0,
-            buf_weights,
-            0,
-            buf_weights.length
-        );
-    });
+    device.queue.writeBuffer(
+        buffersW,
+        0,
+        buf_weights,
+        0,
+        buf_weights.length
+    );
 
-    // create bind group using a GPUBindGroupDescriptor
-    const [blurParamsBGH, blurParamsBGHOPt] = 
-        [blur.blurHPipeline, blur.blurHOptPipeline].map((p)=>{
+    // create bind groups using GPUBindGroupDescriptor
+    const [blurParamsBGH, blurParamsBGHOPt, blurParamsBGV, blurParamsBGVOPt] = 
+        [blur.blurHPipeline, blur.blurHOptPipeline, 
+            blur.blurVPipeline, blur.blurVOptPipeline].map((p)=>{
             return device.createBindGroup({
                 layout: p.getBindGroupLayout(1),
                 entries: [
                     {
                         binding: 0,
                         resource: {
-                            buffer: buffersR[0],
-                        },
-                    },
-                    {
-                        binding: 1,
-                        resource: {
-                            buffer: buffersW[0],
-                        },
-                    },
-                ],
-            });
-        });
-
-    // create bind group using a GPUBindGroupDescriptor
-    const [blurParamsBGV, blurParamsBGVOPt] = 
-        [blur.blurVPipeline, blur.blurVOptPipeline].map((p)=>{
-            return device.createBindGroup({
-                layout: p.getBindGroupLayout(1),
-                entries: [
-                    {
-                        binding: 0,
-                        resource: {
-                            buffer: buffersR[1],
-                        },
-                    },
-                    {
-                        binding: 1,
-                        resource: {
-                            buffer: buffersW[1],
+                            buffer: buffersW,
                         },
                     },
                 ],
@@ -156,55 +114,41 @@ function updateBlurParams(device, blur, R, sigma) {
 }
 
 // Create compute pipeline 
-async function createComputePipeline(device, tex0, tex1) {
-    // fetch shader code as a string
-    let response = await fetch("blur.wgsl");
-    if (!response.ok) {
-        alert(`fetch: HTTP error! status: ${response.status}`);
-        return;
-    }
-    const shader_str = await response.text();
-    
+async function createComputePipelines(device, R, CACHE_SIZE, tex0, tex1) {
+
     // create shader module
-    const shaderModule = device.createShaderModule({
-        label: 'Blur compute shader',
-        code: shader_str,
+    const shaderModule = await createShaderModule(device, 'blur.wgsl');
+
+    // create blur H/V pipelines 
+    const [blurHPipeline, blurVPipeline] = ['blurH', 'blurV'].map((p)=>{
+        return device.createComputePipeline({
+            label: p,
+            layout: 'auto',
+            compute: {
+                module: shaderModule,
+                entryPoint: p,
+                constants: {R : R}, // pipeline-overridable constant
+            },      
+        });
     });
 
-    const blurHPipeline = device.createComputePipeline({
-        label: 'blurH',
-        layout: 'auto',
-        compute: {
-            module: shaderModule,
-            entryPoint: 'blurH',
-        },      
-    });
-
-    const blurVPipeline = device.createComputePipeline({
-        label: 'blurV',
-        layout: 'auto',
-        compute: {
-            module: shaderModule,
-            entryPoint: 'blurV',
-        },      
-    });
-
-    const blurHOptPipeline = device.createComputePipeline({
-        label: 'blurH_opt',
-        layout: 'auto',
-        compute: {
-            module: shaderModule,
-            entryPoint: 'blurH_opt',
-        },      
-    });
-
-    const blurVOptPipeline = device.createComputePipeline({
-        label: 'blurV_opt',
-        layout: 'auto',
-        compute: {
-            module: shaderModule,
-            entryPoint: 'blurV_opt',
-        },      
+    // create shader module - opt
+    const shaderModuleOpt = await createShaderModule(device, 'blur_opt.wgsl');
+    
+    // create blur H/V pipelines opt
+    const [blurHOptPipeline, blurVOptPipeline] = ['blurH_opt', 'blurV_opt'].map((p)=>{
+        return device.createComputePipeline({
+            label: p,
+            layout: 'auto',
+            compute: {
+                module: shaderModuleOpt,
+                entryPoint: p,
+                constants: { // pipeline-overridable constants
+                    R : R,
+                    CACHE_SIZE: CACHE_SIZE
+                },
+            },      
+        });
     });
 
     // create bind group using a GPUBindGroupDescriptor
@@ -231,7 +175,7 @@ async function createComputePipeline(device, tex0, tex1) {
             entries: [
                 {
                     binding: 0,
-                    resource: tex1.createView(),
+                    resource: tex1.createView(), // note flipped order of textures
                 },
                 {
                     binding: 1,
@@ -242,14 +186,14 @@ async function createComputePipeline(device, tex0, tex1) {
     });
 
     return {
-        blurHPipeline: blurHPipeline,
-        blurVPipeline: blurVPipeline,
-        bindGroupH: bindGroupH,
-        bindGroupV: bindGroupV,
-        blurHOptPipeline: blurHOptPipeline,
-        blurVOptPipeline: blurVOptPipeline,
-        bindGroupHOPt: bindGroupHOPt,
-        bindGroupVOPt: bindGroupVOPt
+        blurHPipeline,
+        blurVPipeline,
+        bindGroupH,
+        bindGroupV,
+        blurHOptPipeline,
+        blurVOptPipeline,
+        bindGroupHOPt,
+        bindGroupVOPt
     };    
 }
 
@@ -296,7 +240,6 @@ async function main() {
         size: [imageCB.width, imageCB.height, 1],
         format: 'rgba8unorm',
         usage:
-            GPUTextureUsage.TEXTURE_BINDING |
             GPUTextureUsage.COPY_DST |
             GPUTextureUsage.COPY_SRC |
             GPUTextureUsage.RENDER_ATTACHMENT,
@@ -320,14 +263,13 @@ async function main() {
     const tex1 = device.createTexture({
         size: [imageCB.width, imageCB.height, 1],
         format: 'rgba8unorm',
-        usage:  GPUTextureUsage.COPY_DST | 
-                GPUTextureUsage.COPY_SRC |
+        usage:   
                 GPUTextureUsage.STORAGE_BINDING | 
                 GPUTextureUsage.TEXTURE_BINDING,
     });
 
     // create plane
-    const plane = await createPlane(device, 30.0);
+    const plane = await createPlane(device);
 
     // create uniform buffer to hold scale vec4f
     const uniformBufferSize = 16; 
@@ -379,67 +321,28 @@ async function main() {
         ],
     });
 
-    // create compute pipeline
-    const blur = await createComputePipeline(device, tex0, tex1);
-    
-    // create a GPURenderPassDescriptor object
-    const renderPassDescriptor = {
-        colorAttachments: [{
-          clearValue:  { r: 0, g: 0, b: 0, a: 1.0 },
-          loadOp: 'clear',
-          storeOp: 'store',
-          view: context.getCurrentTexture().createView()
-        }],
-    };
-
-    // create a compute pass descriptor
-    const computePassDescriptor = {};
-
-    /** Storage for timestamp query results */
-    let querySet = undefined;
-    /** Timestamps are resolved into this buffer */
-    let resolveBuffer = undefined;
-    /** Pool of spare buffers for MAP_READing the timestamps back to CPU. A buffer
-     * is taken from the pool (if available) when a readback is needed, and placed
-     * back into the pool once the readback is done and it's unmapped. */
-    const spareResultBuffers = [];
-
-    if (hasTimestampQuery) {
-        querySet = device.createQuerySet({
-          type: 'timestamp',
-          count: 4,
-        });
-        resolveBuffer = device.createBuffer({
-          size: 4 * BigInt64Array.BYTES_PER_ELEMENT,
-          usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
-        });
-        computePassDescriptor.timestampWrites = {
-          querySet,
-          beginningOfPassWriteIndex: 0,
-          endOfPassWriteIndex: 1,
-        };
-        renderPassDescriptor.timestampWrites = {
-          querySet,
-          beginningOfPassWriteIndex: 2,
-          endOfPassWriteIndex: 3,
-        };
-      }
-
-    let applyBlur = false;
+    // number of threads per workgroup
+    const NTHREADS = 256;
+    // blur radius
     let R = 5;
+    // cache size for workgroup color array
+    let CACHE_SIZE = NTHREADS + 2 * R;
+
+    // create compute pipeline
+    let blur = await createComputePipelines(device, R, CACHE_SIZE, tex0, tex1);
+    
+    // update blur parameters the first time
+    let applyBlur = false;
     let sigma = 1.0;
     updateBlurParams(device, blur, R, sigma);
 
-    // Select the checkbox element
-    let applyBlurCheckbox = document.querySelector('#apply_blur');
-    // Define the function to update blur parameters
-    function updateBlurParamsOnChange() {
-        applyBlur = applyBlurCheckbox.checked;
+    // add event listener for apply blur checkbox
+    const applyBlurCB = document.querySelector('#apply_blur');
+    applyBlurCB.addEventListener('change', (event)=> {
+        applyBlur = applyBlurCB.checked;
         updateBlurParams(device, blur, R, sigma);
         render();
-    }
-    // Attach an event listener to the checkbox that triggers on change
-    applyBlurCheckbox.addEventListener('change', updateBlurParamsOnChange);
+    });
 
     // add event listener for optimize checkbox
     const optimizeCB = document.querySelector('#optimize');
@@ -447,20 +350,23 @@ async function main() {
         updateBlurParams(device, blur, R, sigma);
         render();
     });
-    // radius slider 
-    const r_slider = document.querySelector("#r_slider");
-    r_slider.addEventListener("input", (event) => {
-        R = r_slider.value;
-        document.querySelector("#r_label").innerHTML = r_slider.value;
-        updateBlurParams(device, blur, R, sigma);
-        render();
-    }
-    );
-    // sigma slider 
+
+    // add event listener for sigma slider 
     const s_slider = document.querySelector("#s_slider");
     s_slider.addEventListener("input", (event) => {
         sigma = s_slider.value;
         document.querySelector("#s_label").innerHTML = s_slider.value;
+        updateBlurParams(device, blur, R, sigma);
+        render();
+    }
+    );
+
+    // add event listener for nIter slider
+    let nIter = 1;
+    const i_slider = document.querySelector("#i_slider");
+    i_slider.addEventListener("input", (event) => {
+        nIter = i_slider.value;
+        document.querySelector("#i_label").innerHTML = i_slider.value;
         updateBlurParams(device, blur, R, sigma);
         render();
     }
@@ -474,20 +380,45 @@ async function main() {
         render();
     });
 
-
-    let nIter = 1;
-    const i_slider = document.querySelector("#i_slider");
-    i_slider.addEventListener("input", (event) => {
-        nIter = i_slider.value;
-        document.querySelector("#i_label").innerHTML = i_slider.value;
+    // add event listener for radius slider 
+    const r_slider = document.querySelector("#r_slider");
+    r_slider.addEventListener("input", async (event) => {
+        R = r_slider.value;
+        document.querySelector("#r_label").innerHTML = r_slider.value;
+        // radius change required updating cache size and re-creating compute pipelines
+        CACHE_SIZE = NTHREADS + 2 * R;
+        blur = await createComputePipelines(device, R, CACHE_SIZE, tex0, tex1);
         updateBlurParams(device, blur, R, sigma);
         render();
     }
     );
 
-    let computePassDurationSum = 0;
-    let renderPassDurationSum = 0;
-    let timerSamples = 0;
+    // create a GPURenderPassDescriptor object
+    const renderPassDescriptor = {
+        colorAttachments: [{
+          clearValue:  { r: 0.5, g: 0.5, b: 0.5, a: 1.0 },
+          loadOp: 'clear',
+          storeOp: 'store',
+          view: context.getCurrentTexture().createView()
+        }],
+    };
+
+    // create a compute pass descriptor
+    const computePassDescriptor = {};
+
+    // Timestamp query
+    let querySet = undefined;
+    if (hasTimestampQuery) {
+        querySet = device.createQuerySet({
+            type: 'timestamp',
+            count: 2,
+        });
+        computePassDescriptor.timestampWrites = {
+            querySet,
+            beginningOfPassWriteIndex: 0,
+            endOfPassWriteIndex: 1,
+        };
+    }
 
     // define render function 
     async function render() {
@@ -507,7 +438,7 @@ async function main() {
         );
 
         // ********************
-        // Compute 
+        // Compute blur
         // ********************
 
         if (applyBlur) {
@@ -521,14 +452,14 @@ async function main() {
                     computePass.setPipeline(blur.blurHOptPipeline);
                     computePass.setBindGroup(0, blur.bindGroupHOPt);
                     computePass.setBindGroup(1, blur.blurParamsBGHOPt);
-                    computePass.dispatchWorkgroups(Math.ceil(imageCB.width/ 256), 
+                    computePass.dispatchWorkgroups(Math.ceil(imageCB.width/ NTHREADS), 
                         imageCB.height, 1);
                     // vertical blur 
                     computePass.setPipeline(blur.blurVOptPipeline);
                     computePass.setBindGroup(0, blur.bindGroupVOPt);
                     computePass.setBindGroup(1, blur.blurParamsBGVOPt);
                     computePass.dispatchWorkgroups(imageCB.width, 
-                        Math.ceil(imageCB.height/ 256), 1);
+                        Math.ceil(imageCB.height/ NTHREADS), 1);
                 }
             }
             else {
@@ -553,39 +484,41 @@ async function main() {
             computePass.end();
         }
 
-        // make a render pass encoder to encode render specific commands
-        const pass = encoder.beginRenderPass(renderPassDescriptor);
-
         // ********************
         // Draw plane 
         // ********************
 
+        // make a render pass encoder to encode render specific commands
+        const renderPass = encoder.beginRenderPass(renderPassDescriptor);
+
         // set the render pipeline
-        pass.setPipeline(plane.renderPipeline);
+        renderPass.setPipeline(plane.renderPipeline);
         // set bind group
-        pass.setBindGroup(0, planeBindGroup);
+        renderPass.setBindGroup(0, planeBindGroup);
         // draw
-        pass.draw(4); 
+        renderPass.draw(4); 
 
         // end render pass
-        pass.end();
+        renderPass.end();
 
         // collect timestamp data 
         let resultBuffer = undefined;
         if (hasTimestampQuery) {
-            resultBuffer =
-            spareResultBuffers.pop() ||
-            device.createBuffer({
-                size: 4 * BigInt64Array.BYTES_PER_ELEMENT,
+            resultBuffer = device.createBuffer({
+                size: 2 * BigInt64Array.BYTES_PER_ELEMENT,
                 usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
             });
-            encoder.resolveQuerySet(querySet, 0, 4, resolveBuffer, 0);
+            let resolveBuffer = device.createBuffer({
+                size: 2 * BigInt64Array.BYTES_PER_ELEMENT,
+                usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+            });
+            encoder.resolveQuerySet(querySet, 0, 2, resolveBuffer, 0);
             encoder.copyBufferToBuffer(
-            resolveBuffer,
-            0,
-            resultBuffer,
-            0,
-            resultBuffer.size
+                resolveBuffer,
+                0,
+                resultBuffer,   
+                0,
+                resultBuffer.size
             );
         }
 
@@ -594,44 +527,14 @@ async function main() {
         // submit to GPU queue
         device.queue.submit([commandBuffer]);
 
-         // compute and display timestamp data 
-        if (hasTimestampQuery) {
+        // compute and display timestamp data 
+        if (hasTimestampQuery && enableTiming && applyBlur) {
             resultBuffer.mapAsync(GPUMapMode.READ).then(() => {
-              const times = new BigInt64Array(resultBuffer.getMappedRange());
-              const computePassDuration = Number(times[1] - times[0]);
-              const renderPassDuration = Number(times[3] - times[2]);
-    
-              // In some cases the timestamps may wrap around and produce a negative
-              // number as the GPU resets it's timings. These can safely be ignored.
-              if (computePassDuration > 0 && renderPassDuration > 0) {
-                computePassDurationSum += computePassDuration;
-                renderPassDurationSum += renderPassDuration;
-                timerSamples++;
-              }
-              resultBuffer.unmap();
-        
-              // Periodically update the text for the timer stats
-              const kNumTimerSamplesPerUpdate = 100;
-              if (timerSamples >= kNumTimerSamplesPerUpdate) {
-                const avgComputeMicroseconds = Math.round(
-                  computePassDurationSum / timerSamples / 1000
-                );
-                const avgRenderMicroseconds = Math.round(
-                  renderPassDurationSum / timerSamples / 1000
-                );
-                console.log(avgComputeMicroseconds, 
-                        avgRenderMicroseconds, spareResultBuffers.length);
-                        
-                document.querySelector("#render_label").innerHTML = avgRenderMicroseconds;
-                document.querySelector("#compute_label").innerHTML = avgComputeMicroseconds;
-
-                computePassDurationSum = 0;
-                renderPassDurationSum = 0;
-                timerSamples = 0;
-              }
-              spareResultBuffers.push(resultBuffer);
+              const vals = new BigInt64Array(resultBuffer.getMappedRange());
+              const deltaT = Number(vals[1] - vals[0]);                
+              console.log(deltaT/1000);
             });
-          }
+        }
 
         // request animation - called continuously if timing is enabled
         if (enableTiming) {

@@ -38,6 +38,10 @@
       <input type="checkbox" id="optimize" checked>
       <label>Optimize</label>
     </div>
+    <div>
+      <input type="checkbox" id="enable_timing">
+      <label>Enable GPU Timing</label>
+    </div>
     <hr/>
     <fieldset>
       <legend>Blur Parameters</legend>
@@ -53,21 +57,6 @@
         <label>Iteration: </label> <input type="range" min="1" max="20" value="1" id="i_slider">
         <label id="i_label">1</label>
       </div>
-    </fieldset>
-    <hr/>
-    <fieldset>
-      <legend>GPU Load</legend>
-      <div>
-        <input type="checkbox" id="enable_timing">
-        <label>Enable Timing</label>
-      </div>
-      <div>
-        Render: <label id="render_label">0</label> us
-      </div>
-      <div>
-        Compute: <label id="compute_label">0</label> us
-      </div>
-    </fieldset>
   </div>
 </body>
 </html>
