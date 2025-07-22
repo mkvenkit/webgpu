@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Volume Rendering</title>
+  <script type="module" src="volrender.js"></script>
+  <style>
+    /* Create two columns that float next to each other */
+    .column1 {
+      float: left;
+    }
+    .column2 {
+      float: left;
+      margin-left: 4px;
+      background-color: #afafafaf;
+      border: solid;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <h2>
+      Volume Rendering
+    </h2>
+  </div>
+  
+  <div class="column1"> 
+    <canvas id="webgpuCanvas" width="800" height="800"></canvas>
+  </div>
+
+  <div class="column2"> 
+    <div>
+      <!-- Dataset Dropdown -->
+      <label for="dataset-select">Dataset:</label>
+      <select id="dataset-select" name="dataset">
+        <option value="brain" selected>Brain</option>
+        <option value="sphere">Sphere-cuboid</option>
+      </select>
+    </div>
+    <hr/>
+
+    <div>
+        <!-- Render Style Dropdown -->
+      <label for="render-style-select">Render Style:</label>
+      <select id="render-style-select" name="render-style">
+        <option value="volume" selected>Volume</option>
+        <option value="x-slice">X Slice</option>
+        <option value="y-slice">Y Slice</option>
+        <option value="z-slice">Z Slice</option>
+      </select>
+    </div>
+    <hr/>
+
+    <fieldset>
+      <legend>Controls</legend>
+      <div>
+        <label>Slice</label> <input type="range" min="0" max="20" value="0" id="slice_slider">
+        <label id="slice_value">0</label>
+      </div>
+
+      <hr/>
+      
+      <div>
+        <input type="checkbox" id="rotate">
+        <label>Rotate</label>
+      </div>
+    </fieldset>
+    
+  </div>
+</body>
+</html>
