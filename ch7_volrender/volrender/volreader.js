@@ -20,14 +20,14 @@ export async function loadVolume(dirName, device) {
 
     const width = firstBitmap.width;
     const height = firstBitmap.height;
-    const depth = fileList.length;
+    const nImages = fileList.length;
 
-    console.log('data dims: ' + width + ' x ' + height + ' x ' + depth);
+    console.log('data dims: ' + width + ' x ' + height + ' x ' + nImages);
 
     const texture = device.createTexture({
-        size: { width, height, depthOrArrayLayers: depth },
+        size: { width, height, depthOrArrayLayers: nImages },
         format: "r8unorm", // grayscale / red channel only
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
         dimension: "3d"
     });
 
@@ -80,6 +80,6 @@ export async function loadVolume(dirName, device) {
         texture,
         width,
         height,
-        depth
+        nImages
     };
 }

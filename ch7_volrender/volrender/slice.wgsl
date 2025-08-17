@@ -44,12 +44,12 @@ fn vertex_main(@builtin(vertex_index) vIndex : u32) -> VertexOut {
     var output : VertexOut;
     output.position = vec4f(sliceCtrl.imageScale.xyz * vertices[vIndex], 1.0);
     let texCoord2D = texCoords[vIndex];
-    let axis = sliceCtrl.sliceInfo.x;
+    let axis = i32(sliceCtrl.sliceInfo.x + 0.5);
     let fraction = sliceCtrl.sliceInfo.y;
-    if (axis == 0.0) {
+    if (axis == 0) {
         output.texCoord3D = vec3f(fraction, texCoord2D.x, texCoord2D.y);
     }
-    else if (sliceCtrl.sliceInfo.x == 1.0){  
+    else if (axis == 1){  
         output.texCoord3D = vec3f(texCoord2D.x, fraction, texCoord2D.y);
     }
     else {

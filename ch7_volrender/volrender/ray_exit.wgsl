@@ -7,14 +7,15 @@
 // 
 // ----------------------------------------------------------------------
 
-struct VertexOut {
-    @builtin(position) position: vec4f,
-    @location(0) color: vec4f
-}
 struct Uniforms {
   mvpMat : mat4x4<f32>,
 }
 @binding(0) @group(0) var<uniform> uniforms : Uniforms;
+
+struct VertexOut {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec4f
+}
 
 @vertex fn vertex_main(
     @location(0) position: vec3f, 

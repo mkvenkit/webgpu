@@ -13,7 +13,7 @@ import {
   } from '../../common/wgpu-matrix.module.js';
 
 import {loadVolume} from './volreader.js';
-import { createCube } from './raycube.js';
+import { createCube, updateTFUniforms, updateCanvasDims} from './raycube.js';
 import { createSlicePipeline, writeToBufferSlice} from './slicerender.js';
 
 // datasets
@@ -70,6 +70,18 @@ async function main() {
     const sliceSlider = document.getElementById("slice_slider");
     const sliceValueLabel = document.getElementById("slice_value");
     const rotateChk = document.querySelector('#rotate');
+    // Transfer function
+    const winCenterSlider = document.getElementById("winc_slider");
+    const winCenterLabel = document.getElementById("winc");
+    const winWidthSlider = document.getElementById("winw_slider");
+    const winWidthLabel = document.getElementById("winw");
+    const expSlider = document.getElementById("exp_slider");
+    const expLabel = document.getElementById("exp");
+    const ascaleSlider = document.getElementById("ascale_slider");
+    const ascaleLabel = document.getElementById("ascale");
+    const enableTFChk = document.querySelector('#enable_tf');
+    const lowColorUI = document.querySelector('#lowColor');
+    const highColorUI = document.querySelector('#highColor');
 
     let renderStyle = RenderStyles.X_SLICE;
 
@@ -83,6 +95,7 @@ async function main() {
                 console.log("Rendering in Volume style...");
                 sliceSlider.disabled = true;
                 rotateChk.disabled = false;
+                winCenterSlider.disabled = false;
                 break;
             case RenderStyles.X_SLICE:
             case RenderStyles.Y_SLICE:
@@ -90,6 +103,7 @@ async function main() {
                 console.log(`Rendering ${renderStyle}...`);
                 sliceSlider.disabled = false;
                 rotateChk.disabled = true;
+                winCenterSlider.disabled = true;
                 break;
         }
 
@@ -120,7 +134,7 @@ async function main() {
                 break;
             case RenderStyles.Z_SLICE:
                 sliceDim = 2;
-                dimVal = volume.depth;
+                dimVal = volume.nImages;
                 break;
         }
 
@@ -144,7 +158,7 @@ async function main() {
     // trigger once
     await handleSelections();
 
-    function updateSliceFraction(isRender) {
+    function updateSliceFraction() {
         const sliceIndex = parseInt(sliceSlider.value);
         const maxIndex = parseInt(sliceSlider.max);
 
@@ -170,13 +184,50 @@ async function main() {
     // When slider moves
     sliceSlider.addEventListener("input", updateSliceFraction);
 
+    // for color UI
+    function hexToRgb(hex) {
+        const r = parseInt(hex.slice(1, 3), 16) / 255;
+        const g = parseInt(hex.slice(3, 5), 16) / 255;
+        const b = parseInt(hex.slice(5, 7), 16) / 255;
+        return [r, g, b];
+    }
+
+    // transfer function UI updates
+    function updateTransferFunctionUI() {
+        // UI update
+        winCenterLabel.textContent = parseFloat(winCenterSlider.value).toFixed(2);
+        winWidthLabel.textContent = parseFloat(winWidthSlider.value).toFixed(2);;
+        expLabel.textContent = parseFloat(expSlider.value).toFixed(2);;
+        ascaleLabel.textContent = parseFloat(ascaleSlider.value).toFixed(2);;
+
+        // update value in GPU
+        updateTFUniforms(device, cube.tfUniformBuffer, 
+        {
+            windowCenter: parseFloat(winCenterSlider.value),
+            windowWidth: parseFloat(winWidthSlider.value),
+            exponent: parseFloat(expSlider.value),
+            alphaScale: parseFloat(ascaleSlider.value),
+            lowColor: hexToRgb(lowColorUI.value),
+            highColor: hexToRgb(highColorUI.value),
+            enable: enableTFChk.checked
+        }
+    );
+    }
+    // add event handlers for transfer function UI
+    [winCenterSlider, winWidthSlider, expSlider, ascaleSlider, enableTFChk, lowColorUI, highColorUI]
+        .forEach(slider => slider.addEventListener("input", updateTransferFunctionUI));
+
     // Initialize at start
     writeToBufferSlice(device, slice.uniformBuffer, 0, 
         volume.width, volume.height, 0.5);
 
+    // call at start
+    updateTransferFunctionUI();
+
+    // update window dims
+    updateCanvasDims(device, cube.canvasDimsUniformBuffer, canvas.width, canvas.height);
+
     // time step
-    let timeStep = 0.0;
-    let now = 0;
     let theta = 0.0;
 
     function updateCamera() {
@@ -201,8 +252,8 @@ async function main() {
         let modelMat = mat4.identity();
         if (rotate) {
             theta += 0.01; 
-            modelMat = mat4.rotationZ(theta);
         }
+        modelMat = mat4.rotationZ(theta);
 
         lookAtMat = mat4.multiply(lookAtMat, modelMat);
 
@@ -212,7 +263,7 @@ async function main() {
 
         // write uniform buffer to device 
         device.queue.writeBuffer(
-            cube.uniformBuffer,
+            cube.mvpMatUniformBuffer,
             0,
             mvpMat.buffer,
             mvpMat.byteOffset,
@@ -229,7 +280,7 @@ async function main() {
     });
 
     // create a GPURenderPassDescriptor dict
-    const renderPassDescriptor = {
+    const mainRenderPass = {
         colorAttachments: [{
           clearValue:  { r: 0.2, g: 0.2, b: 0.2, a: 1.0 },
           loadOp: 'clear',
@@ -262,7 +313,7 @@ async function main() {
     function render() {
 
         // set texture 
-        renderPassDescriptor.colorAttachments[0].view = 
+        mainRenderPass.colorAttachments[0].view = 
             context.getCurrentTexture().createView();
 
         // make a command encoder to start encoding commands
@@ -285,7 +336,7 @@ async function main() {
             passBack.end();
 
             // make a render pass encoder to encode render specific commands
-            const pass = encoder.beginRenderPass(renderPassDescriptor);
+            const pass = encoder.beginRenderPass(mainRenderPass);
             
             pass.setPipeline(cube.pipelineRC);
             pass.setBindGroup(0, cube.uniformBindGroupRC);
@@ -299,7 +350,7 @@ async function main() {
         }
         else {
             // make a render pass encoder to encode render specific commands
-            const pass = encoder.beginRenderPass(renderPassDescriptor);
+            const pass = encoder.beginRenderPass(mainRenderPass);
             
             pass.setPipeline(slice.renderPipeline);
             pass.setBindGroup(0, slice.bindGroup);
