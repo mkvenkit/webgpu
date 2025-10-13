@@ -2,6 +2,12 @@
 
 This examples draws a helix wrapped around a torus.
 
+# Server
+
+```
+http-server -c 1
+```
+
 # Drawing Multiple Primitives 
 
 Drawing the helix and the great circle together.

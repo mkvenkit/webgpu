@@ -15,6 +15,7 @@ const r = 2;
 const R = 10;
 const N = 20;
 
+// Helper function to compute point on toroidal helix
 function compute_pt_helix(t) {
     // compute vertex from parametric equation
     let x = (R + r*Math.cos(N*t))*Math.cos(t);
@@ -29,7 +30,8 @@ function createHelixVertices(vert) {
     let count = 0;
     for (let t = 0; t <= 2*Math.PI; t += 0.001) {    
         // compute vertex from parametric equation
-        let P = compute_pt_helix(t);         // add vertex 
+        let P = compute_pt_helix(t);         
+        // add vertex 
         vert.push(...P);
         // keep count
         count++;
@@ -39,8 +41,6 @@ function createHelixVertices(vert) {
 
 // Create a circle on XY plane with center (0, 0, 0) and radius R
 function createCircleVertices(vert) {
-    // set radius
-    let R = 10;
     // generate circle
     let count = 0;
     for (let t = 0; t <= 2*Math.PI; t += 0.001) {
@@ -55,6 +55,7 @@ function createCircleVertices(vert) {
     return count;
 }
 
+// Compute the tangent on toroidal helix at given t
 function compute_tangent_helix(t) {
     // compute tangent T = dP/dt
     let Tx = -(R + r*Math.cos(N*t))*Math.sin(t) - r*N*Math.sin(N*t)*Math.cos(t);
@@ -109,21 +110,6 @@ export async function createHelix(device, pipelineLayout) {
         label: 'Helix shader',
         code: shader_str,
     });
-
-    // fetch shader code as a string
-    response = await fetch("cube.wgsl");
-    if (!response.ok) {
-        alert(`fetch: HTTP error! status: ${response.status}`);
-        return;
-    }
-    const shader_str_cube = await response.text();
-
-    // create shader module
-    const shaderModuleCube = device.createShaderModule({
-        label: 'Cube shader',
-        code: shader_str_cube,
-    });
-
 
     // define empty array 
     let vert = [];

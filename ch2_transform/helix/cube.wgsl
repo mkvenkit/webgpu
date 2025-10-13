@@ -7,7 +7,7 @@
 // 
 // ----------------------------------------------------------------------
 
-// define a struct to hold camera paramaters
+// define a struct to hold camera parameters
 struct Camera {
     // modelview-projection matrix
     mvpMat : mat4x4<f32>,
@@ -16,31 +16,15 @@ struct Camera {
     // apply align matrix? 
     applyAlign : i32
 }
-
-// material properties
+// define a struct to hold material properties
 struct Material {
     color: vec4f,
-    flag : i32
+    shape : i32
 }
-// define a struct to hold vertex and color 
-struct VertexOut {
-    @builtin(position) position: vec4f,
-    @location(0) color: vec4f
-}
-
-// define uniform to hold mvp matrix
+// define uniform to hold camera parameters
 @group(0) @binding(0) var<uniform> camera : Camera;
-
-// uniform color
+// define uniform to hold material properties
 @group(1) @binding(0) var<uniform> material : Material;
-
-// struct to hold helix position, normal, etc.
-struct HelixGeom {
-    P : vec3f,      // position 
-    T : vec3f,      // tangent
-    N : vec3f,      // normal
-    S : vec3f,      // side = T X N 
-}
 
 // helix params 
 var<private> r : f32 = 2.0;
@@ -56,6 +40,14 @@ fn compute_tangent_helix(t : f32) -> vec3f
     T.y =  (R + r*cos(N*t))*cos(t) - r*N*sin(N*t)*sin(t);
     T.z =  r*N*cos(N*t);
     return T;
+}
+
+// struct to hold helix position, normal, etc.
+struct HelixGeom {
+    P : vec3f,      // position 
+    T : vec3f,      // tangent
+    N : vec3f,      // normal
+    S : vec3f,      // side = T X N 
 }
 
 // compute position on toroidal helix 
@@ -99,6 +91,12 @@ var<private> dt = array<f32, 7>(
     0, 1, 2, 3, 4, 5, 6,
 );
     
+// define a struct to hold vertex and color 
+struct VertexOut {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec4f
+}
+
 // vertex shader entry 
 @vertex fn vertex_main(
     @builtin(instance_index) idx : u32,
@@ -107,8 +105,9 @@ var<private> dt = array<f32, 7>(
     ) -> VertexOut
 {
     // push each instance along the curve by dt  
-    var k = 0.0025;
-    var t =  k * camera.timeStep + 0.04*dt[idx];
+    var a = 0.0025;
+    var b = 0.04;
+    var t =  a * camera.timeStep + b*dt[idx];
     var helix : HelixGeom = compute_helix(t);
 
     // compute position
@@ -125,7 +124,7 @@ var<private> dt = array<f32, 7>(
         // RBM = [R T]
         //       [0 1]
         // where R = [Rx Ry Rz] column vectors 
-        // Since WGSL uses column matrix format, we set the transapose of RBM 
+        // Since WGSL uses column matrix format, we set the transpose of RBM 
         var rigidBM = mat4x4<f32>(
             helix.S.x, helix.S.y, helix.S.z, 0.0,
             helix.T.x, helix.T.y, helix.T.z, 0.0,
@@ -147,14 +146,10 @@ var<private> dt = array<f32, 7>(
         pos = camera.mvpMat * transM * vec4f(position, 1.0);
     }
     var vout : VertexOut;
-    vout.position = pos;
-    
-    if (material.flag == 1) {
-        vout.color = vec4f(cols[idx], 1.0);
-    }
-    else if (material.flag == 2) {
-        vout.color = vec4f(color, 1.0);
-    }
+    // set position 
+    vout.position = pos;    
+    // set color
+    vout.color = vec4f(cols[idx], 1.0);
     return vout;
 }
 

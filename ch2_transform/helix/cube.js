@@ -140,11 +140,9 @@ export async function createCube(device, pipelineLayout) {
     const renderPipeline = device.createRenderPipeline(pipelineDescriptor);
 
     // return pipeline and vertex count 
-    const cubeParams = {
+    return {
         pipeline: renderPipeline,
         vertexBuffer: vertexBuffer,
         count: vertices.length/6
     };
-
-    return cubeParams;
 }

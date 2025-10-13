@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------
 // main.js
 // 
-// Main JavaScript file for the Helix WebGPU example.
+// Main JavaScript file for the Cubes on a Toroidal Helix WebGPU example.
 // 
 // Author: Mahesh Venkitachalam
 // 
@@ -12,8 +12,55 @@ import {vec3, mat4} from '../../common/wgpu-matrix.module.js';
 
 // other imports
 import {createCube} from './cube.js';
-import { createAxes } from './axis.js';
 import { computeHelixTNS, createHelix } from './helix.js';
+
+// Helper function for creating camera bind groups
+function createCameraBindGroups(device, cameraBindGroupLayout) {
+
+    // create uniform buffer to camera params
+    const cameraBufferSize = 80; // 16*4 + 4 + 4 -> pad to 80
+    let cameraBuffers = [];
+    // create buffer 
+    cameraBuffers[0] = device.createBuffer({
+        size: cameraBufferSize,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    // create bind group using a GPUBindGroupDescriptor
+    let cameraBindGroups = [];
+    cameraBindGroups[0] = device.createBindGroup({
+        layout: cameraBindGroupLayout,
+        entries: [
+            {
+                binding: 0,
+                resource: {
+                    buffer: cameraBuffers[0],
+                },
+            }
+        ],
+    });
+    // create buffer
+    cameraBuffers[1] = device.createBuffer({
+        size: cameraBufferSize,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    // create bind group using a GPUBindGroupDescriptor
+    cameraBindGroups[1] = device.createBindGroup({
+        layout: cameraBindGroupLayout,
+        entries: [
+            {
+                binding: 0,
+                resource: {
+                    buffer: cameraBuffers[1],
+                },
+            }
+        ],
+    });
+
+    return {
+        bindGroups: cameraBindGroups,
+        buffers: cameraBuffers
+    };
+}
 
 // Helper function for creating materials bind groups
 function createMaterialsBindGroups(device, materialBindGroupLayout) {
@@ -23,16 +70,18 @@ function createMaterialsBindGroups(device, materialBindGroupLayout) {
     // flag : 4 bytes
     // total: 16 + 4 = 20 -> 32 with padding
 
+    // define colors 
     let colors = [
         [1, 1, 0, 1], // helix
         [1, 0, 0, 1], // circle 
         [0, 1, 0, 1], // cube 
-        [0, 0, 1, 1], // axes 
     ];
-    let flags = [0, 0, 1, 2];
+
+    // define shape identifiers
+    let shapes = [0, 1, 2];
 
     let bindGroups = [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 3; i++) {
         // create uniform to hold materials buffer
         const materialsBuffer = device.createBuffer({
             size: 32,
@@ -50,7 +99,7 @@ function createMaterialsBindGroups(device, materialBindGroupLayout) {
         device.queue.writeBuffer(
             materialsBuffer,
             16,
-            new Int32Array([flags[i]]), // flag set 
+            new Int32Array([shapes[i]]), // flag set 
             0,
             1
         );
@@ -102,12 +151,12 @@ async function main() {
         entries: [{
             binding: 0, // mpvMat
             visibility: GPUShaderStage.VERTEX,
-            buffer: {},
+              buffer: {},
         }]
     });
 
     // create materials bind group 
-    const materialBindGroupLayout = device.createBindGroupLayout({
+    const materialBindGroupLayout = device.createBindGroupLayout({  
         entries: [{
             binding: 0, // color
             visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
@@ -125,12 +174,8 @@ async function main() {
 
     // create helix 
     const helix = await createHelix(device, pipelineLayout);
-
     // create cube
-    const cubeParams = await createCube(device, pipelineLayout);
-
-    // create axes 
-    const axes = await createAxes(device, pipelineLayout);
+    const cube = await createCube(device, pipelineLayout);
 
     // create a depth texture 
     const depthTexture = device.createTexture({
@@ -155,91 +200,56 @@ async function main() {
         },
     };
 
-    
-    // create uniform buffer to camera params
-    const cameraBufferSize = 80; // 16*4 + 4 + 4 -> pad to 80
-    let cameraBuffers = [];
-    // create buffer 
-    cameraBuffers[0] = device.createBuffer({
-        size: cameraBufferSize,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    // create bind group using a GPUBindGroupDescriptor
-    let cameraBindGroup = [];
-    cameraBindGroup[0] = device.createBindGroup({
-        layout: cameraBindGroupLayout,
-        entries: [
-            {
-                binding: 0,
-                resource: {
-                    buffer: cameraBuffers[0],
-                },
-            }
-        ],
-    });
-    // create buffer
-    cameraBuffers[1] = device.createBuffer({
-        size: cameraBufferSize,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    // create bind group using a GPUBindGroupDescriptor
-    cameraBindGroup[1] = device.createBindGroup({
-        layout: cameraBindGroupLayout,
-        entries: [
-            {
-                binding: 0,
-                resource: {
-                    buffer: cameraBuffers[1],
-                },
-            }
-        ],
-    });
-
-    // todo
+    // create camera bind groups
+    let cameraBG = createCameraBindGroups(device, cameraBindGroupLayout);
+    // create materials bind groups
     let materialsBG = createMaterialsBindGroups(device, materialBindGroupLayout);
 
     // time step
     let timeStep = 0.0;
-    // flag to apply align matrix 
-    let applyAlign = 0;
 
     // Update camera parameters 
-    function updateCamera(mode) {
+    // viewportID is the viewport number (0/1)
+    function updateCamera(viewportID) {
 
         // set align flag
-        if (document.querySelector('#align_cubes').checked) {
-            applyAlign = 1;
-        }
-        else {
-            applyAlign = 0;
-        }
+        let applyAlign = document.querySelector('#align_cubes').checked ? 1 : 0;
 
-        // create lookAt matrix
+        // lookAt Matrix 
         let lookAtMat = mat4.create();
-        let fov = 40 * Math.PI / 180;
 
-        if (mode == 0) {
+        // field of view in radians
+        let fov = 0;
+        // create lookAt matrix
+        if (viewportID == 0) {
             const eye = [20, 20, 10];
             const target = [0, 0, 0];
             const up = [0, 0, 1];
             lookAtMat = mat4.lookAt(eye, target, up);
+            // set FOV
+            fov = 40 * Math.PI / 180;
         }
         else {
+            // set time step 
             let t = 0.0025 * timeStep;
+            // compute T, N, S alignments parameters 
             const cam = computeHelixTNS(t);
-            //console.log(cam);
-            if (applyAlign == 1) {
+            if (applyAlign == 1) { // align 
                 let k = 2.0;
                 let E = vec3.subtract(cam.P, vec3.mulScalar(cam.T, k));
                 lookAtMat = mat4.lookAt(E, cam.P, cam.N);
+                // set FOV
                 fov = 90 * Math.PI / 180;
             }
-            else {
+            else { // don't align 
                 let E = [0, 0, 0];
                 let up = [0, 0, 1];
                 // compute true up vector 
-                
-                lookAtMat = mat4.lookAt(E, cam.P, up);
+                let D = vec3.normalize(cam.P);
+                let S = vec3.cross(D, up);
+                let U = vec3.cross(S, D);                
+                lookAtMat = mat4.lookAt(E, cam.P, U);
+                // set FOV
                 fov = 60 * Math.PI / 180;
             }
         }
@@ -257,32 +267,32 @@ async function main() {
         const mvpMat = mat4.create();
         mat4.multiply(projMat, lookAtMat, mvpMat);
 
-        // write mvp matrix to GPU 
-        device.queue.writeBuffer(
-            cameraBuffers[mode],
-            0,
-            mvpMat.buffer,
-            mvpMat.byteOffset,
-            mvpMat.byteLength
-        );
+        // set buffers and offsets
+        let camData = [
+            [
+                0,
+                mvpMat.buffer,
+                mvpMat.byteOffset,
+                mvpMat.byteLength
+            ],
+            [
+                mvpMat.byteLength,
+                new Float32Array([timeStep]),
+                0,
+                1
+            ],
+            [
+                mvpMat.byteLength + 4,
+                new Int32Array([applyAlign]),
+                0,
+                1
+            ]
+        ];
 
-        // write time step to buffer 
-        device.queue.writeBuffer(
-            cameraBuffers[mode],
-            mvpMat.byteLength,
-            new Float32Array([timeStep]),
-            0,
-            1
-        );
-
-        // write align flag to buffer 
-        device.queue.writeBuffer(
-            cameraBuffers[mode],
-            mvpMat.byteLength + 4,
-            new Int32Array([applyAlign]),
-            0,
-            1
-        );
+        // write to GPU 
+        for (let i = 0; i < camData.length; i++) {
+            device.queue.writeBuffer(cameraBG.buffers[viewportID], ...camData[i]);
+        }
     }
 
     // define render function 
@@ -304,7 +314,7 @@ async function main() {
         // update camera params for frame
         updateCamera(0);
         // set camera bind group
-        pass.setBindGroup(0, cameraBindGroup[0]);
+        pass.setBindGroup(0, cameraBG.bindGroups[0]);
 
         // ********************
         // draw helix and circle:
@@ -316,36 +326,22 @@ async function main() {
         // set material bind group
         pass.setBindGroup(1, materialsBG[0]);
         // draw helix
-        pass.draw(helix.countH); 
+        pass.draw(helix.countH, 1, 0, 0); 
         // set material bind group
         pass.setBindGroup(1, materialsBG[1]);
         // draw circle 
-        pass.draw(helix.countC, 1, helix.countH);
+        pass.draw(helix.countC, 1, helix.countH, 0);
         // ********************
         // draw cube:
         // ********************
         // set vertex buffer
-        pass.setVertexBuffer(0, cubeParams.vertexBuffer);
+        pass.setVertexBuffer(0, cube.vertexBuffer);
         // set the render pipeline
-        pass.setPipeline(cubeParams.pipeline);
+        pass.setPipeline(cube.pipeline);
         // set bind group
         pass.setBindGroup(1, materialsBG[2]);
         // draw cube 
-        pass.draw(cubeParams.count, 7, 0, 0);
-        // ********************
-        // draw axes:
-        // ********************
-        // Is checked?
-        if (document.querySelector('#show_cube_axes').checked) {
-            // set vertex buffer
-            pass.setVertexBuffer(0, axes.vertexBuffer);
-            // set the render pipeline
-            pass.setPipeline(axes.pipeline);
-            // set bind group
-            pass.setBindGroup(1, materialsBG[3]);
-            // draw axes  
-            pass.draw(axes.count, 7, 0, 0);
-        }
+        pass.draw(cube.count, 7, 0, 0);
 
         // ***** Second Viewport *****/
         let x = 2*canvas.width/3;
@@ -356,7 +352,7 @@ async function main() {
         // update camera params for frame
         updateCamera(1);
         // set camera bind group
-        pass.setBindGroup(0, cameraBindGroup[1]);
+        pass.setBindGroup(0, cameraBG.bindGroups[1]);
 
         // ********************
         // draw helix and circle:
@@ -368,36 +364,22 @@ async function main() {
         // set material bind group
         pass.setBindGroup(1, materialsBG[0]);
         // draw helix
-        pass.draw(helix.countH); 
+        pass.draw(helix.countH, 1, 0, 0); 
         // set material bind group
         pass.setBindGroup(1, materialsBG[1]);
         // draw circle 
-        pass.draw(helix.countC, 1, helix.countH);
+        pass.draw(helix.countC, 1, helix.countH, 0);
         // ********************
         // draw cube:
         // ********************
         // set vertex buffer
-        pass.setVertexBuffer(0, cubeParams.vertexBuffer);
+        pass.setVertexBuffer(0, cube.vertexBuffer);
         // set the render pipeline
-        pass.setPipeline(cubeParams.pipeline);
+        pass.setPipeline(cube.pipeline);
         // set bind group
         pass.setBindGroup(1, materialsBG[2]);
         // draw cube 
-        pass.draw(cubeParams.count, 7, 0, 0);
-        // ********************
-        // draw axes:
-        // ********************
-        // Is checked?
-        if (document.querySelector('#show_cube_axes').checked) {
-            // set vertex buffer
-            pass.setVertexBuffer(0, axes.vertexBuffer);
-            // set the render pipeline
-            pass.setPipeline(axes.pipeline);
-            // set bind group
-            pass.setBindGroup(1, materialsBG[3]);
-            // draw axes  
-            pass.draw(axes.count, 7, 0, 0);
-        }
+        pass.draw(cube.count, 7, 0, 0);
 
         // end render pass
         pass.end();

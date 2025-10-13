@@ -16,22 +16,14 @@ struct Camera {
     // apply align matrix? 
     applyAlign : i32
 }
-
 // material properties
 struct Material {
     color: vec4f,
-    flag : i32
+    shape : i32
 }
-// define a struct to hold vertex and color 
-struct VertexOut {
-    @builtin(position) position: vec4f,
-    @location(0) color: vec4f
-}
-
 // define uniform to hold mvp matrix
 @group(0) @binding(0) var<uniform> camera : Camera;
-
-// uniform color
+// define uniform color
 @group(1) @binding(0) var<uniform> material : Material;
 
 // vertex shader entry 
