@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Order Dependent Transparency Example</title>
+  <script type="module" src="main.js"></script>
+</head>
+<body>
+  <div>
+    <span>
+      <input type="checkbox" id="rotate">
+      <label for="rotate">Rotate</label>
+    </span>
+    <span>
+      <input type="checkbox" id="flipOrder">
+      <label for="flipOrder">Flip Order</label>
+    </span>
+    <span>
+      <input type="checkbox" id="premultAlpha">
+      <label for="flipOrder">Premultiply Alpha</label>
+    </span>
+  </div>
+  <canvas id="webgpuCanvas" width="800" height="600"></canvas>
+</body>
+</html>
