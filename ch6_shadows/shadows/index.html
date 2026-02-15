@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shadow Mapping</title>
+  <script type="module" src="main.js"></script>
+
+  <style>
+    body {
+      font-family: sans-serif;
+    }
+
+    .column1 {
+      float: left;
+    }
+
+    .column2 {
+      float: left;
+      margin-left: 8px;
+      padding: 8px;
+      background-color: #e0e0e0;
+      border: 1px solid #888;
+      min-width: 260px;
+    }
+
+    fieldset {
+      margin-bottom: 10px;
+    }
+
+    label {
+      margin-right: 6px;
+    }
+
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>Shadow Mapping</h2>
+
+  <div class="column1">
+    <canvas id="webgpuCanvas" width="800" height="600"></canvas>
+  </div>
+
+  <div class="column2">
+
+    <!-- Basic Controls -->
+    <div>
+      <input type="checkbox" id="rotate">
+      <label for="rotate">Rotate</label>
+    </div>
+
+    <div>
+      <input type="checkbox" id="zoom">
+      <label for="zoom">Zoom</label>
+    </div>
+
+    <div>
+      <input type="checkbox" id="shadow_enable" checked>
+      <label for="shadow_enable">Shadows On</label>
+    </div>
+
+    <div>
+      <input type="checkbox" id="culling_enable">
+      <label for="culling_enable">Culling On</label>
+    </div>
+
+    <div>
+      <input type="checkbox" id="show_smap">
+      <label for="show_smap">Show Shadow Map</label>
+    </div>
+
+    <hr>
+
+    <!-- Light Position -->
+    <fieldset>
+      <legend>Light Position</legend>
+
+      <div class="slider-row">
+        <label>X</label>
+        <input type="range" id="light_x" min="-10" max="10" value="5">
+        <span id="light_x_label">5</span>
+      </div>
+
+      <div class="slider-row">
+        <label>Y</label>
+        <input type="range" id="light_y" min="-10" max="10" value="10">
+        <span id="light_y_label">10</span>
+      </div>
+
+      <div class="slider-row">
+        <label>Z</label>
+        <input type="range" id="light_z" min="5" max="20" value="10">
+        <span id="light_z_label">5</span>
+      </div>
+    </fieldset>
+
+    <!-- Shadow Map Resolution -->
+    <fieldset>
+      <legend>Shadow Map Resolution</legend>
+
+      <div>
+        <input type="radio" name="smap_res" id="smap_512" value="512">
+        <label for="smap_512">512</label>
+      </div>
+
+      <div>
+        <input type="radio" name="smap_res" id="smap_1024" value="1024" checked>
+        <label for="smap_1024">1024</label>
+      </div>
+
+      <div>
+        <input type="radio" name="smap_res" id="smap_2048" value="2048">
+        <label for="smap_2048">2048</label>
+      </div>
+    </fieldset>
+
+    <!-- Bias -->
+    <fieldset>
+      <legend>Bias</legend>
+
+      <div>
+        <input type="checkbox" id="slope_bias_enabled">
+        <label for="slope_bias">Slope Bias</label>
+      </div>
+
+      <hr/>
+
+      <div class="slider-row">
+        <label>Bias</label>
+        <input type="range"
+              id="shadow_bias"
+              min="0"
+              max="0.01"
+              step="0.0001"
+              value="0.002">
+        <span id="shadow_bias_label">0.002</span>
+      </div>
+
+      <div class="slider-row">
+        <label>Slope Scale</label>
+        <input type="range"
+              id="slope_scale"
+              min="0"
+              max="0.01"
+              step="0.001"
+              value="0.0">
+        <span id="slope_scale_label">0.0</span>
+      </div>
+    </fieldset>
+
+
+    <!-- Filtering -->
+    <fieldset>
+      <legend>Filtering</legend>
+
+      <div>
+        <input type="radio" name="filtering" id="filter_nearest" value="Nearest" checked>
+        <label for="filter_nearest">Nearest</label>
+      </div>
+
+      <div>
+        <input type="radio" name="filtering" id="filter_linear" value="Linear" checked>
+        <label for="filter_linear">Linear</label>
+      </div>
+
+      <div>
+        <input type="radio" name="filtering" id="filter_pcf" value="PCF" checked>
+        <label for="filter_pcf">PCF</label>
+      </div>
+
+      <div>
+        <input type="radio" name="filtering" id="filter_poisson" value="Poisson">
+        <label for="filter_poisson">Poisson</label>
+      </div>
+
+      <div>
+        <input type="radio" name="filtering" id="filter_poisson_rot" value="PoissonRot">
+        <label for="filter_poisson_rot">Rotated Poisson</label>
+      </div>
+    </fieldset>
+
+  </div>
+</body>
+</html>

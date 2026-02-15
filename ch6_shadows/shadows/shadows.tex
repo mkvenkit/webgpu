@@ -1,0 +1,2192 @@
+\chapter{Shadows}
+\label{chap:shadows}
+
+In our WebGPU journey so far, we've covered geometric transformations, lighting models, texture mapping, and transparency. We now turn our attention to \emph{shadows}, a feature that further enhances visual realism. While earlier chapters focused on how objects are positioned, shaded, and blended, this chapter describes how light is blocked by geometry and that affects the appearance of other objects in the scene. Without shadows, even well-lit, textured scenes tend to look artificial, as important depth and contact cues are missing.
+
+In real-time rendering, shadows are not produced automatically by lighting equations, and must be computed as a separate step. For each point on a surface, we need to determine whether it's directly illuminated by a light source, or occluded by other geometry. There are various approaches to solving this problem. In this chapter, we will look at the \emph{shadow mapping} technique, and how it can be implemented using WebGPU.
+
+\section{Introduction to Shadows}
+
+Shadows arise when an object, called an \emph{occluder}, blocks light from reaching a surface, which is the \emph{receiver} for the shadow. The visual appearance of a  shadow depends on both the geometry of the scene and the nature of the light source. An ideal point light emits rays from a single position and produces hard-edged shadows consisting only of an \emph{umbra}, the fully dark region where the light is completely blocked by the occluder. But real light sources have finite area, leading to partial occlusion and the formation of a \emph{penumbra} around the umbra, a lighter region where the light is only partially blocked and the shadow transitions gradually into full illumination. The presence of both umbra and penumbra regions produces soft shadows, which provide 
+useful visual cues about the spatial relationships between objects in a scene.
+
+\begin{figure}[htp!]
+    \centering
+    \includegraphics[width=10cm, height=6cm, keepaspectratio]{ch6_sm_figures/sm-shadows-intro.png}
+    \caption{A point light produces hard shadows, while an extended light source creates umbra and
+penumbra regions, resulting in soft shadows.}
+    \label{fig:sm-shadow-intro}
+\end{figure}
+
+Several techniques have been developed to approximate shadows in real-time rendering, each with its own trade-offs. \emph{Planar shadows} project occluder geometry onto a flat surface along the light direction. This projection can be implemented efficiently using a \emph{shadow matrix} and rendered as a darkened, semi-transparent shape. Variants such as blurred or offset projections are often used as \emph{drop shadows} to suggest softness. 
+While fast and simple, planar shadows only work for flat receivers and cannot represent shadows on curved or uneven surfaces. We'll have more to discuss about planar shadows in the \emph{Homework} section!
+
+Another early approach is \emph{projective texture} based shadows, where the scene is rendered from the light's point of view and the resulting image is projected onto visible surfaces as a texture. Recall that we discussed this technique in the \emph{Texturing} chapter. Regions covered by the projected shadow texture appear darkened. This technique can handle arbitrary receivers but does not account for depth relationships, so occluded surfaces may be incorrectly shadowed.
+
+\emph{Shadow mapping} extends the idea of projective texture shadows by incorporating depth comparison. Instead of projecting color information, the scene is rendered from the light's perspective into a depth buffer, commonly called a \emph{shadow map}. During rendering from the camera view, each fragment is transformed into light space and its depth is compared against the stored depth value. If the fragment lies behind previously recorded geometry, it is classified as being in shadow. This use of the z-buffer enables shadow mapping to correctly handle curved surfaces. In this chapter, we will focus exclusively on shadow mapping. 
+
+\section{Shadow Mapping}
+
+Shadow mapping is the most widely used technique for real-time shadow rendering in modern GPU pipelines. Instead of explicitly constructing shadow geometry, shadow mapping treats shadow computation as a visibility problem between surfaces and a light source. The key idea is to determine whether a point visible to the camera is also visible to the light. If it is not, the point lies in shadow.
+
+The method consists of two rendering passes. In the first pass, the scene is rendered from the point of view of the light source. Rather than producing a color image, only depth information is stored in a depth texture called the \emph{shadow map}. Each texel records the distance from the light to the closest surface along a given direction. 
+
+In the second rendering pass, the scene is rendered from the camera view. For each fragment, its position is transformed into the light's \emph{clip space} -- recall our discussion on the graphics pipeline from our \emph{Transformations} chapter -- and compared against the corresponding depth value stored in the shadow map. If the fragment is farther from the light than the stored depth, it is occluded and therefore in shadow. The shadow mapping scheme is illustrated in Figure \ref{fig:sm-smap}.
+
+\begin{figure}[htp!]
+    \centering
+    \includegraphics[width=10cm, height=6cm, keepaspectratio]{ch6_sm_figures/sm-smap.png}
+    \caption{Shadow mapping pipeline}
+    \label{fig:sm-smap}
+\end{figure}
+
+Let $\mathbf{P}_w$ be a fragment position in world space. To perform the shadow test, this position is transformed into the light's clip space using the light's modelview-projection matrix $\mathbf{M}_L$ as shown in Equation \ref{eqn:sm-proj1}.
+
+\begin{equation} \label{eqn:sm-proj1}
+\mathbf{P}_L = \mathbf{M}_{proj} \times \mathbf{M}_{lookAt} \times \mathbf{M}_{model} \times \mathbf{P}_w = \mathbf{M}_{mvp} \times \mathbf{P}_w
+\end{equation}
+
+This maps the position into normalized device coordinates (NDC), where visible points lie in the range $[-1,1]$. At this stage, the $z$ component represents the fragment depth from the light, normalized to the light's near and far planes. However, the shadow maps is in a 2D depth texture, which use coordinates in the range $[0,1]$. To convert from NDC space to texture space, a bias matrix $\mathbf{B}$ is applied as shown in Equation \ref{eqn:sm-biasmat}.
+
+\begin{equation} \label{eqn:sm-biasmat}
+\mathbf{B} =
+\begin{bmatrix}
+\frac{1}{2} & 0           & 0           & \frac{1}{2} \\
+0           & \frac{1}{2} & 0           & \frac{1}{2} \\
+0           & 0           & \frac{1}{2} & \frac{1}{2} \\
+0           & 0           & 0           & 1
+\end{bmatrix}
+\end{equation}
+
+This matrix remaps coordinates from $[-1,1]$ to $[0,1]$ for $x$, $y$, and $z$. Recall that we did something similar for texture projections in the \emph{Texturing} chapter. 
+
+Note that Equation \ref{eqn:sm-proj1} results in a homogeneous coordinate 
+$\mathbf{P}_L = (x_L, y_L, z_L, w_L)$ 
+which represents the fragment as seen from the light, expressed in clip space. We need to divide each component by $w_L$ to get the coordinates in 3D, which will be done in the shader code. 
+
+The actual fragment computation is done in the shader, and the final shadow matrix passed into the shader as a \lstinline{uniform} is shown in equation \ref{eqn:sm-smatrix}.
+Also note that $\mathbf{M}_{model}$ is passed in separately as each object can have a different model transformation associated with it. (We mainly use it for positioning and orienting the models correctly.)
+
+\begin{equation} \label{eqn:sm-smatrix}
+\mathbf{M}_{shadow} = \mathbf{B} \times \mathbf{M}_{mvp}
+\end{equation}
+
+After the normalization to texture coordinates in the range $[0, 1]$ and perspective division, the fragment depth $z_{f}$ will be compared with the stored shadow map depth $z_{s}$. The visibility test is conceptually given by equation \ref{eq:sm-vis}.
+
+\begin{equation} \label{eq:sm-vis}
+\text{shadow} =
+\begin{cases}
+1 & \text{if } z_f > z_s, \\
+0 & \text{otherwise}.
+\end{cases}
+\end{equation}
+
+This boolean result is then used to attenuate the lighting contribution for the fragment. A simple way to do it would be to multiply the color by the normalized z-depth value. In the actual shader implementation, however, this comparison is performed using a \emph{comparison sampler}, which evaluates the depth test directly in hardware and returns a filtered visibility value rather than an explicit boolean result.
+
+\section{Problems with Shadow Mapping}
+
+Although shadow mapping is flexible and efficient, it is not without problems. Most arise from the finite-precision nature of depth buffers, combined with differences
+between how geometry is rasterized from the light's point of view and from the camera's point of view. Let's look at some of these issues and how to correct them.
+
+\subsection{Shadow Acne}
+
+One of the most common artifacts in shadow mapping is \emph{shadow acne}, which appears as self-shadowing noise across surfaces, as shown in Figure \ref{fig:sm-acne}. This problem has two main causes -- limited floating-point precision, and a geometric mismatch between sampling locations. Shadow map samples from the light rarely align exactly with screen-space samples, so small depth differences can cause a surface to incorrectly shadow itself.
+
+\begin{figure}[htp!]
+    \centering
+    \includegraphics[width=10cm, height=6cm, keepaspectratio]{ch6_sm_figures/shadow-acne.png}
+    \caption{Shadow acne}
+    \label{fig:sm-acne}
+\end{figure}
+
+A standard solution is to introduce a small depth bias $\epsilon$ during the shadow comparison as shown in equation \ref{eqn:sm-acne1}.
+
+\begin{equation} \label{eqn:sm-acne1}
+z_{frag} > z_{shadow} + \epsilon.
+\end{equation}
+
+This bias pushes the effective shadow test slightly away from the surface, reducing false
+self-shadowing. But, choosing $\epsilon$ is non-trivial and scene dependent. In our case, we will create a UI slider for the bias so we can experiment with it.
+
+A constant depth bias is insufficient for surfaces viewed at grazing angles, where depth slopes relative to the light direction are steep. In such cases, shadow acne reappears even with bias. \emph{Slope-scale depth bias} addresses this by increasing the bias proportionally to the surface slope. In the shader, the depth bias applied during the shadow comparison is computed as shown in equation \ref{eqn:sm-dsb}.
+
+\begin{equation} \label{eqn:sm-dsb}
+\text{bias}
+\;=\;
+r
+\;+\;
+m \cdot \left( 1 - \mathbf{N}\cdot\mathbf{L} \right),
+\end{equation}
+
+where $r$ and $m$ are user-controlled constants. This bias is used ... For the curious, the derivation of the equation \ref{eqn:sm-dsb} can be found in \emph{Appendix C}.
+
+\subsection{Peter Panning}
+
+Excessive depth bias can cause the opposite artifact known as \emph{peter panning}, where shadows appear detached from their casting objects, as shown in Figure \ref{fig:sm-pp}. This occurs because the biased shadow test effectively moves the shadow away from the occluder.
+
+\begin{figure}[htp!]
+    \centering
+    \includegraphics[width=10cm, height=6cm, keepaspectratio]{ch6_sm_figures/shadow-pp.png}
+    \caption{Peter Panning}
+    \label{fig:sm-pp}
+\end{figure}
+
+Getting rid of peter panning requires careful tuning of bias parameters and, where possible, the use of slope-scale bias instead of constant offsets. We often need to look at the scene and tweak the settings.
+
+\subsection{Depth Precision and Near/Far Planes}
+
+Shadow map precision is influenced by the choice of \emph{near} and \emph{far} planes for the light's projection matrix. A large depth range reduces effective precision, increasing shadow acne. This problem is especially noticeable for directional lights covering large scenes. The recommended solution is to tightly fit the light frustum to the visible scene region. For directional lights, this often involves computing a bounding box around the camera frustum in light space and adjusting the orthographic projection accordingly.
+
+\subsection{Back-Face Culling}
+
+We learned about \emph{face culling} in the \emph{Transformations} chapter.
+Rendering back-facing triangles into the shadow map can worsen self-shadowing artifacts, since their depths may be closer to the light than the visible surface. A common optimization is to enable front-face culling during the shadow map pass, so only back-facing geometry is rendered. Shadow mapping implicitly assumes solid occluder objects, and this approach works well to reduce shadow acne for such geometry. Closed meshes like a cube or sphere naturally define volumes that block light correctly. Planar or single-sided geometry, such as walls, may allow light to \emph{leak} through when viewed from certain directions. To address this, planar objects may require duplicated back faces or explicit thickness to behave correctly as occluders. Alternatively, such geometry can be excluded from shadow casting when appropriate.
+
+Despite the challenges listed, shadow mapping is still a practical and flexible technique for real-time shadows. By playing with depth precision, biasing, and geometry, we can coax it to produce acceptable shadows that improve realism of the rendered scene.
+
+\section{Filtering Shadows}
+
+Our basic shadow mapping algorithm produces hard-edged shadows because each shadow test is based on a single depth comparison. While this matches the behavior of an ideal point light source, it often appears visually harsh and accentuates aliasing caused by the finite resolution of the shadow map. Shadow filtering techniques address these issues by smoothing shadow boundaries and approximating soft shadow (penumbra) effects.
+
+\subsection{Nearest-Neighbor Filtering}
+
+The simplest form of shadow evaluation uses a nearest-neighbor texture lookup. In this case, a single depth value is sampled from the shadow map and compared against the fragment depth. This approach is computationally inexpensive but results in hard shadow edges and visible stair-step aliasing, especially when the shadow map resolution is low or the shadow is viewed at an angle. Nearest-neighbor sampling also makes shadow artifacts more noticeable, as small changes in texture coordinates can cause abrupt changes in the shadow test result.
+
+\subsection{Linear Filtering with Comparison Samplers}
+
+A modest improvement over nearest-neighbor filtering can be achieved by using a comparison sampler with linear filtering enabled. Instead of returning a binary result from a single texel, the hardware performs depth comparisons at the neighboring texels and linearly interpolates the results. Conceptually, this corresponds to a $2\times2$ percentage-closer filter applied implicitly by the sampler.
+
+This hardware-assisted filtering produces smoother shadow edges than
+nearest-neighbor sampling without requiring explicit loops in the shader.
+While the resulting shadows are still limited by the underlying shadow map
+resolution, linear filtering reduces aliasing and flickering at shadow
+boundaries at a relatively low performance cost. 
+
+For more flexibility and higher-quality soft shadows, the filtering
+process can be extended by explicitly averaging the results of multiple shadow
+tests in the shader. This approach is known as percentage-closer filtering
+(PCF).
+
+\subsection{Percentage-Closer Filtering (PCF)}
+
+PCF improves shadow quality by averaging the results of multiple shadow tests over a small region of the shadow map. Instead of performing a single depth comparison, several samples are taken around the projected shadow coordinate, and the results are averaged to produce a
+fractional shadow value. This effectively softens the shadow edge by blending fully lit and fully shadowed regions. 
+
+Let's look at how to implement a $3\times3$ percentage-closer filtering (PCF)
+kernel in the fragment shader. Let $(u,v)$ be the normalized shadow map coordinates of the fragment after perspective division, and let $z_f$ be the biased fragment depth. For each
+integer offset $(i,j)$ in the range $[-1,1]$, a comparison sample is taken at a
+neighboring texel location as shown in equation \ref{eq:sm-pcf-offset}.
+
+\begin{equation} \label{eq:sm-pcf-offset}
+(u_{ij}, v_{ij}) = (u, v) + (i, j)\,\Delta ,
+\end{equation}
+
+where $\Delta = (1/W, 1/H)$ is the shadow map texel size computed from the
+texture dimensions. Each comparison evaluates
+
+\begin{equation} \label{eq:pcf-compare}
+s_{ij} =
+\text{compare}\!\left(z_f,\; z_s(u_{ij}, v_{ij})\right) ,
+\end{equation}
+
+returning a value in $[0,1]$ depending on whether the fragment is lit or in
+shadow at that sample location.The final PCF visibility is computed as the average of all nine samples,
+
+\begin{equation} \label{eq:pcf-average}
+S_{\text{PCF}} =
+\frac{1}{9}
+\sum_{j=-1}^{1}
+\sum_{i=-1}^{1}
+s_{ij} .
+\end{equation}
+
+\begin{figure}[htp!]
+    \centering
+    \includegraphics[width=10cm, height=6cm, keepaspectratio]{ch6_sm_figures/filtering_comp1.png}
+    \caption{Filter comparison}
+    \label{fig:sm-filter-comp1}
+\end{figure}
+
+Increasing the kernel size would further soften the edge but would also increase the
+number of texture lookups and the cost of the fragment shader. Also, the regular grid structure of a fixed PCF kernel can introduce visible patterns, especially when shadows are animated or viewed at oblique angles.
+
+To reduce these structured artifacts while maintaining soft shadow edges, we can replace the regular sampling pattern with an irregular one. This brings us to \emph{Poisson disk sampling}, which distributes samples more evenly without forming a repeating grid.
+
+\subsection{Poisson Disk Sampling}
+
+Poisson disk sampling is a method for generating sample points that are random, but not too
+random. Unlike purely random sampling, Poisson disk sampling enforces a minimum distance between any two samples. This constraint prevents samples from clustering while still avoiding regular grid patterns.
+
+\begin{figure}[htp!]
+    \centering
+    \includegraphics[width=10cm, height=6cm, keepaspectratio]{ch6_sm_figures/poisson-comp.png}
+    \caption{Random vs. Poisson disk sampling}
+    \label{fig:sm-pdisk}
+\end{figure}
+
+In Figure \ref{fig:sm-pdisk}~(a), points are generated using uniform random sampling inside a disk. Although the distribution is statistically uniform, you can see some clustering and overlap of points. Some regions contain many points, while others are nearly empty. When used for shadow filtering, this kind of sampling can leads to uneven shadow edges.
+
+In Figure \ref{fig:sm-pdisk}~(b), Poisson disk sampling enforces a minimum separation between points while retaining randomness. This property is ideal for shadow filtering, as it avoids the artifacts of grid sampling such as linear filtering, and the clumping artifacts of pure random sampling.
+
+When applied to shadow mapping, each Poisson disk point represents an offset in shadow map texture space. A depth comparison is performed at each offset, and the results are averaged to produce a shadow visibility value. The irregular distribution of samples breaks up the structured aliasing patterns seen in regular PCF kernels and replaces them with visually less objectionable noise.
+
+To further reduce visible repetition, the Poisson pattern is often rotated or randomized per fragment. This introduces high-frequency grain in the shadow region, but the noise appears natural rather than structured. Although rotated Poisson sampling is more expensive than basic PCF, it produces shadows that better approximate soft penumbrae and is widely used in real-time rendering to achieve higher perceptual quality.
+
+Now let's look at how to implement this sampling method.
+Poisson-disk–based percentage-closer filtering evaluates shadow visibility using
+a fixed set of sample points distributed irregularly over a unit disk. These
+points are generated offline using a Poisson disk sampling algorithm in two
+dimensions, whose goal is to place samples such that no two points are closer
+than a specified minimum distance. This avoids both clustering and regular grid
+patterns, producing a distribution with good coverage and reduced structured
+aliasing.
+
+Let $(u,v)$ denote the normalized (range $[0, 1]$) shadow map coordinates of a fragment and let $\Delta = (1/W, 1/H)$ be the shadow map texel size. Given a precomputed set of $N$ Poisson offsets $\{\mathbf{o}_i\}$, each offset defines a sampling location
+\[
+(u_i, v_i) = (u, v) + \mathbf{o}_i \, \Delta,
+\]
+at which a depth comparison is evaluated,
+\[
+s_i = \text{compare}\!\left(z_f - b,\; z_s(u_i, v_i)\right),
+\]
+where $z_f$ is the fragment depth in light space, $b$ is a depth bias, and
+$z_s$ is the stored shadow map depth. The final visibility is computed as the
+average of all samples,
+\[
+S_{\text{Poisson}} =
+\frac{1}{N} \sum_{i=1}^{N} s_i .
+\]
+
+In the rotated Poisson case, the sample set is commonly rotated on a per-fragment basis. A pseudo-random angle $\theta \in [0, 2\pi)$ is generated from the fragment’s screen-space position, and a 2D rotation matrix is applied to each Poisson offset as shown in equation \ref{eq:poisson-rot}.
+
+\begin{equation} \label{eq:poisson-rot}
+\begin{aligned}
+\mathbf{R}(\theta) &=
+\begin{pmatrix}
+\cos\theta & -\sin\theta \\
+\sin\theta & \phantom{-}\cos\theta
+\end{pmatrix}, \\
+\mathbf{o}_i' &= \mathbf{R}(\theta)\,\mathbf{o}_i, \\
+(u_i, v_i) &= (u, v) + \mathbf{o}_i' \, \Delta .
+\end{aligned}
+\end{equation}
+
+This rotation preserves the relative spacing between samples while varying
+their orientation spatially. The resulting shadows exhibit high-frequency
+grain rather than structured banding. Figure \ref{fig:sm-pdisk-eg} shows an comparison of pure Poisson vs. rotated Poisson sampling.
+
+\begin{figure}[htp!]
+    \centering
+    \includegraphics[width=10cm, height=6cm, keepaspectratio]{ch6_sm_figures/poisson_rot_comp.png}
+    \caption{Poisson vs. rotated Poisson disk sampling for shadows}
+    \label{fig:sm-pdisk-eg}
+\end{figure}
+
+
+In practice, a small fixed table of Poisson offsets is reused across all
+fragments, while the per-fragment rotation provides sufficient variation to
+mask repetition. This combination offers a practical balance between visual
+quality, performance, and implementation simplicity for real-time soft shadow
+approximation. Now let's get a high level overview of how the shadow mapping technique is implemented in WebGPU.
+
+\section{Shadow Mapping in WebGPU}
+
+We've covered the theory of shadow mapping. Now let's look at how to implement this  technique using WebGPU. The API maps naturally to the two-pass structure of shadow mapping.
+
+\subsection{The Shadow Pass}
+
+In WebGPU, a shadow map can be represented as a depth texture with usage flags that allow it to be both rendered into and sampled from. The shadow map texture is created with a depth format \lstinline{depth24plus} and is attached as the depth target of a render pass that has no color attachments. This render pass records depth values from the light's point of view and produces the shadow map used in the second pass.
+
+A dedicated render pipeline is created for this pass using a vertex shader that transforms vertex positions into the light's clip space. No fragment shader output is required, since only depth information is written. Depth testing is enabled with a \lstinline{less} comparison so that only the closest surfaces to the light are stored in the shadow map. The pipeline layout includes a bind group for the light camera parameters and a second bind group for per-object model matrices.
+
+\subsection{The Render Pass}
+
+The main render pipeline extends a standard lighting pipeline by adding access to the shadow map. A comparison sampler is used, allowing depth comparisons to be performed directly in the shader. The bind group for this pipeline includes the camera uniform buffer, the shadow map texture, the comparison sampler, and an additional uniform buffer for shadow parameters such as bias and filtering options.
+
+In the vertex shader, world-space positions are transformed using the shadow matrix to produce shadow map coordinates. After perspective division, these coordinates are interpolated across the primitive and passed to the fragment shader. The fragment shader samples the shadow map using the comparison sampler, which performs the depth test between the reconstructed fragment depth and the stored shadow depth.
+
+\subsection{Debugging}
+
+We'll also create an additional debug render pipeline to visualize the contents of the shadow map directly on screen. This is an invaluable tool for diagnosing issues related to the light frustum and depth buffer precision.
+
+
+\section{The Code}\label{sm:code}
+
+In this section, we will put together the WebGPU app that demonstrates the shadow mapping technique. A typical output from the app is shown in figure \ref{fig:sm-app1}.
+
+\begin {figure} [htp!]
+    \centering
+    \includegraphics[width=10cm, height=6cm, keepaspectratio]{ch6_sm_figures/sm-app.png}
+    \caption{WebGPU Shadow Mapping App}
+    \label{fig:sm-app1}
+\end{figure}
+
+The code for this project is in the \emph{ch6\_shadows/shadows} folder in the
+book’s code repository. Here's a listing of the files.
+
+\begin{enumerate}
+    \item \emph{index.html} The main HTML file that defines the WebGPU canvas and
+    user interface controls for interacting with the shadow mapping demo.
+
+    \item \emph{shadow.js} JavaScript code that creates the shadow map render
+    pipelines, bind groups, and render pass descriptors used to render the
+    depth-only shadow pass.
+
+    \item \emph{shadow.wgsl} The WGSL shader used for shadow map generation. It
+    contains a vertex shader that transforms geometry into light clip space and
+    writes depth values into the shadow map.
+
+    \item \emph{render.js} JavaScript code that creates the main render pipeline,
+    including bind groups for camera data, shadow samplers, shadow parameters,
+    and model parameters.
+
+    \item \emph{render.wgsl} The WGSL shader that performs lighting and shadow
+    evaluation in the main render pass, including support for multiple shadow
+    filtering techniques.
+
+    \item \emph{plane.js} Utility code for generating a ground plane mesh and
+    uploading its vertex data to GPU buffers.
+
+    \item \emph{cube.js} Utility code for generating a cube mesh used as both a
+    shadow caster and receiver.
+
+    \item \emph{teapot.js} Code for loading the Utah teapot geometry from an
+    ASCII STL file, parsing vertex and normal data, and uploading it to the GPU.
+
+    \item \emph{teapot.stl} The ASCII STL file containing the triangle mesh data
+    for the Utah teapot model.
+
+    \item \emph{main.js} The main application entry point that initializes
+    WebGPU, creates all resources, handles UI input, updates camera and light
+    state, and orchestrates the shadow and render passes each frame.
+\end{enumerate}
+
+Let's look at these files in detail.
+
+\subsection{index.html}
+
+The \emph{index.html} file is the entry point to our WebGPU shadow mapping
+application. It is responsible for creating the WebGPU canvas and defining the
+user interface used to interactively explore different aspects of shadow
+mapping. 
+
+The interface provides the following controls:
+
+\begin{enumerate}
+    \item Toggle rotation of the camera around the scene, allowing the shadows
+    to be viewed from different angles.
+
+    \item Toggle zoom, which switches between a wide field-of-view and a narrow
+    field-of-view camera projection.
+
+    \item Enable or disable shadows entirely.
+
+    \item Enable or disable face culling during shadow map generation, which
+    helps demonstrate the effect of culling on shadow artifacts.
+
+    \item Toggle display of the shadow map by itself, rendering the depth texture
+    directly to the screen for debugging and inspection.
+
+    \item Adjust the light position along the $x$, $y$, and $z$ axes using
+    sliders, allowing the effect of light movement on shadows to be observed.
+
+    \item Select the shadow map resolution.
+
+    \item Enable or disable slope-scale depth bias.
+
+    \item Adjust the constant depth bias and slope-scale factor using sliders.
+
+    \item Choose the shadow filtering method.
+    
+\end{enumerate}
+
+\emph{index.html} creates a two-column UI similar to what we have seen in previous chapters, so we won't list the code here. Please refer to the file in the book's code repository chapter. We will be using the HTML element IDs from \emph{index.html} in \emph{main.js} to make the UI work. Now let's look at the code that creates the plane object.
+
+\subsection{plane.js}
+
+The code for creating the plane is in \emph{plane.js}. This is very similar to what we used in Chapters 3 and 4, so we won't go into it in detail.
+
+\subsection{cube.js}
+
+The code for creating the plane is in \emph{plane.js}. Again this is very similar to what we discussed in Chapter 2, so we spend too much time on it.
+
+\subsection{teapot.js}
+
+One of the 3D models we will use to demonstrate shadow mapping, is \emph{The Utah Teapot}. The Utah teapot is one of the most iconic test models in the history of computer
+graphics. It was created in 1975 by Martin Newell, then a researcher at the
+University of Utah, who modeled it based on a tea set he had at home. The Utah Teapot 
+has various characteristics which makes it ideal for computer graphics experiments. For example, it has complex curved surfaces, and can shadow itself. Rendering the Utah Teapot has become a \emph{Hello World!} of sorts for computer graphics programs, and this model is commonly featured in papers, demos, and teaching examples. Let's look at how to load the Utah teapot geometry from an ASCII STL file and convert into a WebGPU vertex buffer. 
+
+\begin{lstlisting}[caption={Parsing vertices and normals from an STL file},
+label={lstSMTeapot_Parse}]
+function readTeapotVerticesSTL(stlString) {
+(@\codewingding{1}@)    const normalRegex = /facet normal ([\s\S]*?)\n/;
+(@\codewingding{2}@)    const vertexRegex = /vertex ([\s\S]*?)\n/g;
+
+    const facets = stlString.split('endfacet').slice(0, -1);
+    let numbers = [];
+
+    facets.forEach(facet => {`
+        let normalMatch = facet.match(normalRegex);
+        if (normalMatch) {
+            let normals =
+(@\codewingding{3}@)                normalMatch[1].trim().split(/\s+/).map(Number);
+
+            let vertexMatch;
+            while ((vertexMatch = vertexRegex.exec(facet)) !== null) {
+                let vertices =
+                    vertexMatch[1].trim().split(/\s+/).map(Number);
+
+                numbers.push(...vertices);
+                numbers.push(...normals);
+            }
+        }
+    });
+
+    return new Float32Array(numbers);
+}
+\end{lstlisting}
+
+The ASCII STL format represents a surface as a collection of triangular facets,
+each defined by a surface normal and three vertex positions. Each facet block in an ASCII STL file begins with a \lstinline{facet normal} line followed by three \lstinline{vertex} lines. Here's a snippet from the file.
+
+\begin{lstlisting}
+solid teapotouts*
+  facet normal -2.224329e-02 -6.850397e-02 -9.974028e-01
+    outer loop
+      vertex 0.000000e+00 7.500000e-01 -2.000000e+00
+      vertex 0.000000e+00 6.682434e-01 -1.994385e+00
+      vertex -8.916049e-02 7.500000e-01 -1.998012e+00
+    endloop
+  endfacet
+\end{lstlisting}
+
+In Listing \ref{lstSMTeapot_Parse}, the \emph{regular expression} \lstinline{/facet normal ([\s\S]*?)\n/} \wingding{1} captures the three floating-point values following the \lstinline{facet normal} keyword, stopping at the end of the line. The expression \lstinline{/vertex ([\s\S]*?)\n/g} \wingding{2} matches each vertex line within the facet, and the global flag \lstinline{g} ensures that all three vertices are extracted. For each vertex, the position is appended to the output array, followed by the facet normal. The \lstinline{trim()} call \wingding{3} removes any leading or trailing whitespace, and
+\lstinline{split(/\s+/)} separates the string into individual components using
+one or more whitespace characters as delimiters. Finally,
+\lstinline{map(Number)} converts each string token into a JavaScript
+\lstinline{Number}, producing an array of three numeric values representing the
+facet normal $(n_x, n_y, n_z)$. This process duplicates the normal for all three vertices, producing an interleaved sequence of \lstinline{(x,y,z,nx,ny,nz)} values. Next, we create a \lstinline{GPUBuffer} to hold the teapot data.
+
+\begin{lstlisting}[caption={Fetching STL file and creating GPU vertex buffer},
+label={lstTeapot_Create}]
+export async function createTeapot(device) {
+
+    let teapot = {};
+
+    await fetch("teapot.stl")
+        .then(response => response.text())
+        .then(strSTL => {
+            const vertices = readTeapotVerticesSTL(strSTL);
+
+            const vertexBuffer = device.createBuffer({
+                size: vertices.byteLength,
+                usage: GPUBufferUsage.VERTEX |
+                       GPUBufferUsage.COPY_DST,
+            });
+
+            device.queue.writeBuffer(
+                vertexBuffer,
+                0,
+                vertices,
+                0,
+                vertices.length
+            );
+
+            teapot = {
+                vertexBuffer: vertexBuffer,
+                count: vertices.length / 6,
+            };
+        });
+
+    return teapot;
+}
+\end{lstlisting}
+
+In \lstinline{createTeapot()}, the \lstinline{Float32Array} returned by \lstinline{readTeapotVerticesSTL()} is uploaded into a GPU vertex buffer. Each vertex consists of six floats, and the final vertex count is computed accordingly for rendering.
+
+\subsection{shadow.js}
+
+This file contains the code responsible for setting up the shadow map rendering pass, including creation of the depth-only render pipeline, associated bind groups, and render pass descriptors used to generate the shadow map from the light’s point of view.
+
+\begin{lstlisting}[caption={Loading and creating the shadow shader module},
+label={lstSM_Shader}]
+export async function createShadowMap(device, vertexBufferLayout, 
+    modelParamsBGL, smTexture) {
+
+    let response = await fetch("shadow.wgsl");
+    if (!response.ok) {
+        alert(`fetch: HTTP error! status: ${response.status}`);
+        return;
+    }
+    let shader_str = await response.text();
+    
+    const shadowShaderModule = device.createShaderModule({
+        label: 'shadow shader',
+        code: shader_str,
+    });
+\end{lstlisting}
+
+The shadow shader is fetched from \lstinline{shadow.wgsl} and compiled into a
+\lstinline{GPUShaderModule}. We'll look at this shader in detail later, but note that it will define only a vertex shader and not a fragment shader, since shadow map generation writes depth values to a texture, and does not produce any color output. Now let's look at the bind group layout creation.
+
+\begin{lstlisting}[caption={Shadow camera bind group layout},
+label={lstSM_BGL}]
+const shadowBGL = device.createBindGroupLayout({
+    entries: [
+        {
+            binding: 0,
+            visibility: GPUShaderStage.VERTEX,
+            buffer: {},
+        },
+    ]
+});
+
+const shadowPipelineLayout = device.createPipelineLayout({
+    bindGroupLayouts: [
+        shadowBGL,      // @group(0)
+        modelParamsBGL, // @group(1)
+    ]
+});
+\end{lstlisting}
+
+This bind group layout defines a single uniform buffer binding for the shadow
+camera parameters. The binding is visible only to the vertex stage, as the
+light-space transformation is applied during vertex processing. The pipeline layout combines the shadow camera parameters with per-model parameters. This ordering matches the group indices used in the WGSL shader. Next, we create the shadow pipeline.
+
+\begin{lstlisting}[caption={Shadow pipeline without culling},
+label={lstSM_PipeNoCull}]
+const shadowPipelineDescriptor = {
+    label: 'shadow pipeline',
+    vertex: {
+        module: shadowShaderModule,
+        entryPoint: 'vertex_main',
+        buffers: vertexBufferLayout
+    },
+    primitive: {
+        topology: 'triangle-list',
+    },
+    depthStencil: {
+        depthWriteEnabled: true,
+        depthCompare: 'less',
+        format: 'depth24plus',
+    },
+    layout: shadowPipelineLayout
+};
+
+const shadowPipeline =
+    device.createRenderPipeline(shadowPipelineDescriptor);
+\end{lstlisting}
+
+This pipeline renders all faces into the shadow map. Depth testing ensures that only the fragment closest to the light is stored in the depth texture. Next, we create the pipeline with front-face culling enabled.
+
+\begin{lstlisting}[caption={Shadow pipeline with front-face culling},
+label={lstSM_PipeCull}]
+const shadowPipelineDescriptorCull = {
+    label: 'shadow pipeline',
+    vertex: {
+        module: shadowShaderModule,
+        entryPoint: 'vertex_main',
+        buffers: vertexBufferLayout
+    },
+    primitive: {
+        topology: 'triangle-list',
+(@\codewingding{1}@)        cullMode: 'front',
+    },
+    depthStencil: {
+        depthWriteEnabled: true,
+        depthCompare: 'less',
+        format: 'depth24plus',
+    },
+    layout: shadowPipelineLayout
+};
+
+const shadowPipelineCull =
+    device.createRenderPipeline(shadowPipelineDescriptorCull);
+\end{lstlisting}
+
+The second pipeline with front-face culling enabled \wingding{1} is used to reduce self-shadowing artifacts such as shadow acne. WebGPU requires separate pipelines because culling modes cannot be changed dynamically. Next, we create the uniform buffers and bind groups.
+
+\begin{lstlisting}[caption={Shadow camera uniform buffer and bind group},
+label={lstSM_UBO}]
+let cameraBufferShadow = device.createBuffer({
+    size: 128,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+});
+
+let cameraBindGroupShadow = device.createBindGroup({
+    label: "shadow camera bind group",
+    layout: shadowBGL,
+    entries: [
+        {
+            binding: 0,
+            resource: {
+                buffer: cameraBufferShadow,
+            },
+        },
+    ],
+});
+
+const shadowPassDescriptor = {
+    label: 'shadow pass desc',
+    colorAttachments: [],
+    depthStencilAttachment: {
+        view: smTexture.createView(),
+        depthClearValue: 1.0,
+        depthLoadOp: 'clear',
+        depthStoreOp: 'store',
+    },
+};
+\end{lstlisting}
+
+The uniform buffer stores two \lstinline{mat4x4<f32>} matrices, the light projection matrix and the light view matrix. Each matrix occupies 64 bytes, resulting in a total buffer size of 128 bytes. Next, we create a renderpass descriptor which defines a \emph{depth-only} pass. The depth texture \lstinline{smTexture} is cleared at the start of the pass and stored after rendering, making it available for use during lighting.
+
+\begin{lstlisting}[caption={Shadow camera uniform buffer update},
+label={lstSM_Update}]
+    function writeUniformBuffer(projMat, lookAtMat) {
+        let offset = 0;
+    
+        if (projMat) {
+            device.queue.writeBuffer(
+                cameraBufferShadow,
+                offset,
+                projMat.buffer,
+                projMat.byteOffset,
+                projMat.byteLength
+            );
+            offset += projMat.byteLength;
+        }
+    
+        if (lookAtMat) {
+            device.queue.writeBuffer(
+                cameraBufferShadow,
+                offset,
+                lookAtMat.buffer,
+                lookAtMat.byteOffset,
+                lookAtMat.byteLength
+            );
+            offset += lookAtMat.byteLength;
+        }
+    }
+
+    return {
+        pipeline: shadowPipeline,
+        pipelineCull: shadowPipelineCull,
+        bindGroup: cameraBindGroupShadow,
+        renderPassDescriptor: shadowPassDescriptor,
+        writeUniformBuffer: writeUniformBuffer
+    }
+}
+\end{lstlisting}
+
+This \lstinline{writeUniformBuffer()} function writes the light projection and view matrices sequentially into the uniform buffer. Finally, \lstinline{createShadowMap()} returns both shadow pipelines, the shadow camera bind group, the render pass descriptor, and the uniform update function. Note the power of JavaScript functions in this usage. The returned \lstinline{writeUniformBuffer()} function forms a \emph{closure} over the shadow camera uniform buffer, encapsulating both the data and the logic required to update it. This allows the caller to update the light’s projection and view matrices through a simple function call, without any knowledge of the underlying GPU buffer, memory layout, or byte offsets.
+
+Now let's look at \lstinline{createShadowMapDebug()} which creates the shadow map debug pipeline which is very useful for visualizing the contents of the depth texture generated during the shadow pass. You can use this to check what your light is ``seeing'', as well as check the effects of depth buffer precision.
+
+\begin{lstlisting}[caption={Shadow map debug shader module creation},
+label={lstSMDbg_Shader}]
+const presentationFormat =
+    navigator.gpu.getPreferredCanvasFormat();
+
+const smapShader = device.createShaderModule({
+    code: await (await fetch("debug_shadow.wgsl")).text(),
+});
+\end{lstlisting}
+
+The debug shader is loaded from \lstinline{debug_shadow.wgsl} and compiled into
+a shader module. Unlike the shadow map generation shader, this shader defines
+both vertex and fragment stages, as it renders directly to the WebGPU canvas.
+
+\begin{lstlisting}[caption={Shadow map debug bind group layout},
+label={lstSMDbg_BGL}]
+const smapBGL = device.createBindGroupLayout({
+    entries: [{
+        binding: 0,
+        visibility: GPUShaderStage.FRAGMENT,
+(@\codewingding{1}@)        texture: { sampleType: "depth" },
+    }],
+});
+
+const smapPipeline = device.createRenderPipeline({
+    layout: device.createPipelineLayout({
+        bindGroupLayouts: [smapBGL],
+    }),
+    vertex: {
+        module: smapShader,
+        entryPoint: "vertex_main",
+    },
+    fragment: {
+        module: smapShader,
+        entryPoint: "fragment_main",
+        targets: [{ format: presentationFormat }],
+    },
+    primitive: {
+        topology: "triangle-list",
+    },
+});
+\end{lstlisting}
+
+To sample the shadow map in the fragment stage, a bind group layout is created with a single depth texture binding. The \lstinline{sampleType: "depth"} annotation \wingding{1} allows the texture to be accessed using depth comparison or explicit depth sampling in the shader code. Next, we create the debug render pipeline which will render a full-screen textured quad that shows the depth values stored in the shadow map. The pipeline layout contains only a single bind group, as no additional uniforms are required. We create the bind group next.
+
+\begin{lstlisting}[caption={Shadow map debug bind group},
+label={lstSMDbg_BG}]
+    const smapBindGroup = device.createBindGroup({
+        layout: smapBGL,
+        entries: [{
+            binding: 0,
+            resource: smTexture.createView(),
+        }],
+    });
+    
+    return {
+        pipeline: smapPipeline,
+        bindGroup: smapBindGroup
+    }
+}
+\end{lstlisting}
+
+The bind group binds the shadow map depth texture view to the fragment shader.
+This allows the shader to read the depth values and visualize it as a grayscale image. 
+Finally, the function returns the debug render pipeline and its bind group. Now let's look at the shader for creating the shadow map texture.
+
+\subsection{shadow.wgsl}
+
+The shadow map generation shader is implemented entirely as a vertex shader.
+Its sole purpose is to transform geometry into light clip space so that depth values can be written into the shadow map.
+
+\begin{lstlisting}[caption={Shadow map vertex shader},
+label={lstSM_WGSL}]
+struct Camera
+{
+    projMat: mat4x4<f32>,
+    lookAtMat: mat4x4<f32>,
+}
+
+struct ModelParams
+{
+    modelMat: mat4x4<f32>,
+    color: vec4f,
+}
+
+@group(0) @binding(0) var<uniform> camera : Camera;
+@group(1) @binding(0) var<uniform> modelParams: ModelParams;
+
+@vertex fn vertex_main(
+    @location(0) position: vec3f,
+) -> @builtin(position) vec4f
+{
+    var output =
+        camera.projMat *
+        camera.lookAtMat *
+        modelParams.modelMat *
+        vec4f(position, 1.0);
+    return output;
+}
+\end{lstlisting}
+
+The \lstinline{Camera} structure holds the light-space projection and view
+matrices. These matrices define the shadow's camera, which is same as the light frustum. The \lstinline{ModelParams} structure stores the per-object model matrix, allowing each mesh to be positioned independently in world space. The uniform variables are bound using two bind groups. The camera parameters are bound at \lstinline{@group(0)}, while per-model parameters are bound at \lstinline{@group(1)}. This matches the pipeline layout defined in \emph{shadow.js}.
+
+The vertex shader entry point \lstinline{vertex_main()} computes the final clip-space position by multiplying the vertex position by the model, view, and projection matrices in sequence. The resulting value is returned as \lstinline{@builtin(position)}, which is
+used by the fixed-function depth test to populate the shadow map. Since we need 
+only the depth information, we won't define a fragment shader for this pipeline. Now let's look at the shaders for the debug pipeline.
+
+\subsection{debug\_shadow.wgsl}
+
+The debug shader renders the shadow map depth texture onto a quad that fills the canvas.
+
+\begin{lstlisting}[caption={Screen-aligned quad vertex data},
+label={lstSMDbgWGSL_Quad}]
+var <private> pos = array<vec2f, 6>(
+    vec2f(-1.0, -1.0),
+    vec2f( 1.0, -1.0),
+    vec2f(-1.0,  1.0),
+    vec2f(-1.0,  1.0),
+    vec2f( 1.0, -1.0),
+    vec2f( 1.0,  1.0)
+);
+
+var <private> uv = array<vec2f, 6>(
+    vec2f(0.0, 1.0),
+    vec2f(1.0, 1.0),
+    vec2f(0.0, 0.0),
+    vec2f(0.0, 0.0),
+    vec2f(1.0, 1.0),
+    vec2f(1.0, 0.0)
+);
+
+struct VSOut {
+    @builtin(position) position : vec4f,
+    @location(0) uv : vec2f,
+};
+
+@group(0) @binding(0) var smap : texture_depth_2d;
+\end{lstlisting}
+
+Two private arrays define the geometry of a full-screen quad using two triangles. Positions are specified directly in clip space, avoiding the need for vertex buffers or transformation matrices. Corresponding texture coordinates map the shadow map over
+the quad. We have seen this approach in the \emph{Texturing} chapter. The shadow map is bound as a depth texture at \lstinline{@group(0)} and is accessed only by the fragment shader, matching the bind group layout defined in \emph{shadow.js}. Now let's look at the vertex shader.
+
+\begin{lstlisting}[caption={Debug vertex shader}, label={lstSMDbgWGSL_VS}]
+@vertex fn vertex_main(
+    @builtin(vertex_index) vid : u32
+) -> VSOut 
+{
+    var out : VSOut;
+    out.position = vec4f(pos[vid], 0.0, 1.0);
+    out.uv = uv[vid];
+    return out;
+}
+\end{lstlisting}
+
+The vertex shader uses \lstinline{@builtin(vertex_index)} to index into the private position and texture coordinate arrays. Notice that there's no matrix multiplication needed here. This technique eliminates the need for vertex buffers and is convenient for rendering simple geometry like the quad, in this case. Now let's look at the fragment shader.
+
+\begin{lstlisting}[caption={Debug fragment shader},
+label={lstSMDbgWGSL_FS}]
+@fragment
+fn fragment_main(in : VSOut) -> @location(0) vec4f {
+    let d = textureLoad(smap, vec2i(in.uv * vec2f(textureDimensions(smap))), 0);
+    return vec4f(vec3f(d), 1.0);
+}
+\end{lstlisting}
+
+The fragment shader reads raw depth values from the shadow map using \lstinline{textureLoad()}, which performs an \emph{unfiltered} fetch, so we can see the data as it is. Texture coordinates in the range \([0,1]\) are scaled to integer texel coordinates using \lstinline{textureDimensions()}. The depth value is replicated across RGB channels to produce a grayscale image of the shadow map. Next, let's look at the normal render pipeline creation.
+
+\subsection{render.js}
+
+The normal render pipeline renders the scene, making use of the shadow map texture to render the shadows.
+
+\begin{lstlisting}[caption={Camera uniform buffer for render pass},
+label={lstRender_CamBuf}]
+export async function createRenderPipeline({
+    device,
+    canvas,
+    context,
+    vertexBufferLayout,
+    modelParamsBGL,
+    smTexture,
+}) {
+    const cameraBufferRender = device.createBuffer({
+        size: 256, // 3 * 4 * 16 + 16 = 208 => 256
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    
+    const response = await fetch("render.wgsl");
+    if (!response.ok) {
+        throw new Error(`Failed to load render.wgsl (${response.status})`);
+    }
+    const shaderCode = await response.text();
+    
+    const shaderModule = device.createShaderModule({
+        label: "render shader",
+        code: shaderCode,
+    });
+\end{lstlisting}
+
+In \lstinline{createRenderPipeline()}, first a uniform buffer is allocated to store camera-related matrices used during the render pass. The size accommodates four \lstinline{mat4x4<f32>} values, including the projection, view, and shadow transformation matrices along with the light's world space position. Next, the main render shader is loaded and compiled into a shader module. This shader contains both vertex and fragment stages, as it performs lighting and shadow evaluation. Now we create the bind groups.
+
+\begin{lstlisting}[caption={Render bind group layout},
+label={lstRender_BGL}]
+const renderBGL = device.createBindGroupLayout({
+    entries: [
+        {
+            binding: 0,
+            visibility: GPUShaderStage.VERTEX,
+            buffer: {},
+        },
+        {
+            binding: 1,
+            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+            sampler: { type: "comparison" },
+        },
+        {
+            binding: 2,
+            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+            texture: { sampleType: "depth" },
+        },
+        {
+            binding: 3,
+            visibility: GPUShaderStage.FRAGMENT,
+            buffer: { type: "uniform" },
+        },
+    ],
+});
+
+const pipelineLayout = device.createPipelineLayout({
+    bindGroupLayouts: [
+        renderBGL,      // group(0)
+        modelParamsBGL, // group(1)
+    ],
+});
+\end{lstlisting}
+
+The bind group layout defines all resources required for rendering with shadows. These include the camera uniform buffer, a comparison sampler for shadow testing, the shadow map depth texture, and an additional uniform buffer for shadow-related parameters. The pipeline layout combines render specific resources with per-model parameters. This mirrors the WGSL binding structure in \emph{render.wgsl}. Next, we create the render pipeline.
+
+\begin{lstlisting}[caption={Main render pipeline},
+label={lstRender_Pipe}]
+const pipeline = device.createRenderPipeline({
+    label: "render pipeline",
+    layout: pipelineLayout,
+    vertex: {
+        module: shaderModule,
+        entryPoint: "vertex_main",
+        buffers: vertexBufferLayout,
+    },
+    fragment: {
+        module: shaderModule,
+        entryPoint: "fragment_main",
+        targets: [{
+            format: navigator.gpu.getPreferredCanvasFormat(),
+        }],
+    },
+    primitive: {
+        topology: "triangle-list",
+        cullMode: "back",
+    },
+    depthStencil: {
+        format: "depth24plus",
+        depthWriteEnabled: true,
+        depthCompare: "less",
+    },
+});
+
+const shadowParamsBuffer = device.createBuffer({
+    size: 32,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+});
+\end{lstlisting}
+
+The render pipeline enables back-face culling and depth testing. The fragment stage will sample the shadow map to apply shadowing during lighting. Next, a small uniform buffer is allocated for shadow-specific parameters, such as bias values or flags used only in the fragment shader. We create the bind groups next.
+
+\begin{lstlisting}[caption={Render bind groups with different samplers},
+label={lstRender_BG}]
+const bindGroupNearest = device.createBindGroup({
+    layout: renderBGL,
+    entries: [
+        { binding: 0, resource: { buffer: cameraBufferRender } },
+        {
+            binding: 1,
+            resource: device.createSampler({
+                compare: "less",
+                minFilter: "nearest",
+                magFilter: "nearest",
+            }),
+        },
+        { binding: 2, resource: smTexture.createView() },
+        { binding: 3, resource: { buffer: shadowParamsBuffer } },
+    ],
+});
+
+const bindGroupLinear = device.createBindGroup({
+    layout: renderBGL,
+    entries: [
+        { binding: 0, resource: { buffer: cameraBufferRender } },
+        {
+            binding: 1,
+            resource: device.createSampler({
+                compare: "less",
+                minFilter: "linear",
+                magFilter: "linear",
+            }),
+        },
+        { binding: 2, resource: smTexture.createView() },
+        { binding: 3, resource: { buffer: shadowParamsBuffer } },
+    ],
+});
+\end{lstlisting}
+
+Two bind groups are created that differ only in the shadow sampler filtering. This allows switching between \lstinline{nearest} and \lstinline{linear} filtered shadow sampling without changing the pipeline. Next, we create the render pass descriptor.
+
+\begin{lstlisting}[caption={Depth texture and render pass descriptor},
+label={lstRender_Pass}]
+const depthTexture = device.createTexture({
+    size: [canvas.width, canvas.height],
+    format: "depth24plus",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT,
+});
+
+const renderPassDescriptor = {
+    colorAttachments: [{
+        view: undefined,
+        clearValue: { r: 0.9, g: 0.9, b: 0.9, a: 1.0 },
+        loadOp: "clear",
+        storeOp: "store",
+    }],
+    depthStencilAttachment: {
+        view: depthTexture.createView(),
+        depthClearValue: 1.0,
+        depthLoadOp: "clear",
+        depthStoreOp: "store",
+    },
+};
+\end{lstlisting}
+
+A depth texture is created for depth testing during the main render pass. The render pass descriptor clears both color and depth buffers each frame and stores the results for presentation. Next, we define a function to send the uniform data to the GPU.
+
+\begin{lstlisting}[caption={Camera buffer update function},
+label={lstRender_Update}]
+function writeToCameraBuffer(
+    projMat,
+    lookAtMat,
+    shadowMat,
+    lightPos
+) {
+    let offset = 0;
+
+    for (const mat of [projMat, lookAtMat, shadowMat]) {
+        if (!mat) continue;
+        device.queue.writeBuffer(
+            cameraBufferRender,
+            offset,
+            mat.buffer,
+            mat.byteOffset,
+            mat.byteLength
+        );
+        offset += mat.byteLength;
+    }
+
+    if (lightPos) {
+        const lp = new Float32Array([
+            lightPos[0],
+            lightPos[1],
+            lightPos[2],
+            1.0
+        ]);
+        device.queue.writeBuffer(cameraBufferRender, offset, lp);
+    }
+}
+
+return {
+        pipeline,
+        bindGroupNearest,
+        bindGroupLinear,
+        renderPassDescriptor,
+        cameraBufferRender,
+        shadowParamsBuffer,
+        writeToCameraBuffer,
+    };
+\end{lstlisting}
+
+This helper function writes the camera, shadow, and light data into the uniform buffer. 
+Finally, the function returns the render pipeline, both bind groups, the render pass descriptor, and buffer handles. Next, let's look at the shader code associated with the main render pipeline.
+
+\subsection{render.wgsl}
+
+This shader performs standard lighting computations we covered in the \emph{Lighting} chapter while sampling the shadow map generated during the shadow pass. In addition to computing diffuse illumination in world space, it evaluates shadow visibility using depth comparisons in light space. The shader also implements constant and slope-scale depth biasing as well as multiple shadow filtering options which are set using the app UI. The file starts by defining some uniform data used by the shaders.
+
+\begin{lstlisting}[caption={Camera, model, and shadow parameter structs},
+label={lstRenderWGSL_Structs}]
+struct Camera
+{
+    projMat: mat4x4<f32>,
+    lookAtMat: mat4x4<f32>,
+    shadowMat: mat4x4<f32>,
+    lightPosW: vec4<f32>,
+}
+
+struct ModelParams
+{
+    modelMat: mat4x4<f32>,
+    nMat: mat4x4<f32>,
+    color: vec4f,
+}
+
+struct ShadowParams {
+    shadowsEnabled: u32,
+    bias: f32,
+    slopeScale: f32,
+    enableSlopeBias: u32,
+    filterType: u32,
+}
+\end{lstlisting}
+
+The \lstinline{Camera} structure stores view, projection, and shadow transformation matrices, along with the world-space light position. The \lstinline{ModelParams} structure provides per-object transforms and material color. The \lstinline{ShadowParams} structure controls shadow on/off, depth biasing, and filter selection. Next, we define the Poisson offsets.
+
+\begin{lstlisting}[caption={Shadow filter constants and Poisson offsets},
+label={lstRenderWGSL_Filters}]
+const NearestFilter :u32 = 0u;
+const LinearFilter  :u32 = 1u;
+const PCFFilter     :u32 = 2u;
+const PoissonFilter :u32 = 3u;
+
+// fixed Poisson offsets
+const poisson = array<vec2f, 4>(
+    vec2f( 0.9092,  0.1441),
+    vec2f( 0.8720, -0.4894),
+    vec2f( 0.0545, -0.2021),
+    vec2f(-0.8576, -0.4667),
+);
+// number of taps
+const POISSON_TAPS : u32 = 4u;
+
+@group(0) @binding(0) var<uniform> camera : Camera;
+@group(0) @binding(1) var shadowMapSampler: sampler_comparison;
+@group(0) @binding(2) var shadowMap: texture_depth_2d;
+@group(0) @binding(3) var<uniform> shadowParams : ShadowParams;
+@group(1) @binding(0) var<uniform> modelParams: ModelParams;
+\end{lstlisting}
+
+Filter type constants are used to select shadow filtering modes without runtime branching. A small fixed Poisson disk of four samples (taps) is used for PCF. These values are obtained by running the \emph{poisson\_gen.py} program included in the code repository.
+
+Next, all render-level resources are bound in \lstinline{@group(0)}, including the camera data, comparison sampler, shadow map, and shadow parameters. Per-model data is bound separately in \lstinline{@group(1)} to allow efficient reuse across draw calls. We define the vertex shader next.
+
+\begin{lstlisting}[caption={Render vertex shader},
+label={lstRenderWGSL_VS}]
+struct VertexOut {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec4f,
+    @location(1) N: vec3f,
+    @location(2) L: vec3f,
+    @location(3) shadowPos: vec4f
+}
+
+@vertex fn vertex_main(
+    @location(0) position: vec3f,
+    @location(1) normal: vec3f,
+) -> VertexOut
+{
+    var output : VertexOut;
+
+    output.position =
+        camera.projMat *
+        camera.lookAtMat *
+        modelParams.modelMat *
+        vec4f(position, 1.0);
+
+    let worldPos =
+        modelParams.modelMat * vec4f(position, 1.0);
+
+    let N = modelParams.nMat * vec4f(normal, 1.0);
+    output.N = normalize(N.xyz);
+    output.L = camera.lightPosW.xyz - worldPos.xyz;
+
+    output.shadowPos = camera.shadowMat * worldPos;
+    output.color = modelParams.color;
+
+    return output;
+}
+\end{lstlisting}
+
+The vertex shader outputs world-space lighting vectors and the light-space position used for shadow map lookup, in addition to the clip-space position. All lighting computations are performed in world space. The vertex shader also transforms the world position into light clip space using \lstinline{camera.shadowMat}, preparing coordinates for shadow map sampling. Now, let's look at the fragment shader.
+
+\begin{lstlisting}[caption={Render fragment shader},
+label={lstRenderWGSL_FS}]
+
+// random function
+fn rand2(p: vec2f) -> f32 {
+    let h = dot(p, vec2f(127.1, 311.7));
+    return fract(sin(h) * 43758.5453);
+}
+
+// fragment shader entry
+@fragment fn fragment_main(fragData: VertexOut) -> @location(0) vec4f
+{
+    // light params
+(@\codewingding{1}@)    let N = normalize(fragData.N);
+    let L = normalize(fragData.L);
+    let ndotl = max(dot(N, L), 0.0);
+    let diffuse = fragData.color.rgb * ndotl;
+
+    // slope bias (gated)
+(@\codewingding{2}@)    let slopeBias = f32(shadowParams.enableSlopeBias) * shadowParams.slopeScale * (1.0 - ndotl);
+
+    // final bias 
+    let bias = shadowParams.bias + slopeBias;
+
+    // perspective divide for shadow pos 
+(@\codewingding{3}@)    let shadowPos = fragData.shadowPos.xyz / fragData.shadowPos.w;
+
+    // mask for valid light-space fragments
+    let valid = f32(fragData.shadowPos.w > 0.0);
+
+    // clamp safely
+    let uv = clamp(shadowPos.xy, vec2f(0.0), vec2f(1.0));
+    let z  = clamp(shadowPos.z, 0.0, 1.0);
+
+    // look up shadow map texture size
+    let texSize = vec2f(textureDimensions(shadowMap));
+    // compute inverse 
+    let texel   = 1.0 / texSize;
+
+    // per-fragment rotation angle
+    let angle = rand2(fragData.position.xy) * 6.28318530718; // 2*pi
+    let c = cos(angle)  ;
+    let s = sin(angle);
+    let rot = mat2x2<f32>(
+        c, -s,
+        s,  c
+    );
+
+    // select filter without control flow
+    let f = shadowParams.filterType;
+    let wNearest = f32(f == NearestFilter);
+    let wLinear  = f32(f == LinearFilter);
+    let wPCF3    = f32(f == PCFFilter);
+    let wPoisson = f32(f == PoissonFilter);
+    let wPoissonRot = f32(f == PoissonRotFilter);
+
+    // Always execute all samples, select by weights
+(@\codewingding{4}@)     var visNearest = 0.0;
+    var visLinear  = 0.0;
+    var visPCF3    = 0.0;
+    var visPoisson = 0.0;
+
+    // nearest / linear (single sample)
+(@\codewingding{5}@)    let s0 = textureSampleCompare(shadowMap, shadowMapSampler, uv, z - bias);
+    
+    visNearest = s0;
+    visLinear  = s0; // hardware PCF when sampler is linear
+
+    // manual 3x3 PCF
+    var sum3 = 0.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let off = vec2f(f32(x), f32(y)) * texel;
+(@\codewingding{6}@)            sum3 += textureSampleCompare(shadowMap, shadowMapSampler, uv + off, z - bias);
+        }
+    }
+    visPCF3 = sum3 / 9.0;
+
+    // Poisson PCF (N taps)
+    var sump = 0.0;
+    for (var i = 0u; i < POISSON_TAPS; i++) {
+        let offset = (wPoisson * poisson[i]) + (wPoissonRot * rot * poisson[i]);
+(@\codewingding{7}@)        sump += textureSampleCompare(
+            shadowMap,
+            shadowMapSampler,
+            uv + offset * texel,
+            z - bias
+        );
+    }
+    visPoisson = sump / f32(POISSON_TAPS);
+
+    // set final visiblity 
+    let visibility =
+        wNearest * visNearest +
+        wLinear  * visLinear  +
+        wPCF3    * visPCF3    +
+        wPoisson * visPoisson;
+
+    // set final visiblity 
+    let visibility =
+        wNearest * visNearest +
+        wLinear  * visLinear  +
+        wPCF3    * visPCF3    +
+        wPoisson * visPoisson + 
+        wPoissonRot * visPoisson;
+
+    let shadowOn = f32(shadowParams.shadowsEnabled);
+(@\codewingding{8}@)    let finalVis = mix(1.0, visibility, shadowOn);
+
+    // modulate color
+(@\codewingding{9}@)    return vec4f(diffuse * finalVis, 1.0);
+}
+\end{lstlisting}
+
+
+This fragment shader computes diffuse lighting and modulates it with a shadow
+visibility term obtained from a depth-based shadow map. The implementation is structured in a way that avoids control-flow divergence of the type \emph{if/else} around texture sampling calls, which is required by WGSL.
+
+The shader begins by reconstructing the lighting vectors in world space \wingding{1}. The
+interpolated normal \lstinline{fragData.N} and light vector \lstinline{fragData.L}
+are normalized, and a simple term is computed for the unshadowed diffuse color contribution.
+
+Next, the shader computes the depth bias used during shadow comparison \wingding{1}. A
+constant bias is always applied, and an optional slope-scale bias is added when
+enabled. The slope-scale term depends on the surface orientation relative to
+the light and is proportional to $(1 - \mathbf{N}\cdot\mathbf{L})$. The boolean flag
+\lstinline{enableSlopeBias} is converted to a float and multiplied directly,
+to avoiding a conditional branch.
+
+The light-space position is then reconstructed by performing a perspective
+divide on \lstinline{fragData.shadowPos} \wingding{3}. This converts the homogeneous light
+coordinates into normalized shadow-map space. The resulting coordinates are clamped to \([0,1]\) to prevent out-of-bounds texture accesses. The shadow-map resolution is queried using \lstinline{textureDimensions()}, and its inverse is used to compute single-texel offset for manual filtering.
+
+A pseudo-random rotation angle is then generated per fragment using a simple hash-based function \lstinline{rand2()} applied to the fragment’s screen-space position. This angle is converted into a 2D rotation matrix and used to rotate the Poisson disk sample offsets. 
+
+The shader then declares several shadow visibility estimates corresponding to
+different filtering modes -- \lstinline{visNearest}, \lstinline{visLinear}, \lstinline{visPCF3}, \lstinline{visPoisson} (fixed and rotated) \wingding{4}. 
+
+Next, a single comparison sample is taken using \lstinline{textureSampleCompare()} \wingding{5}. This function compares the reference depth \((z - \text{bias})\) against the stored depth and returns a visibility value in \([0,1]\). The same result is used for both nearest filtering and hardware linear PCF, since linear filtering is controlled entirely by the sampler state.
+
+For manual percentage-closer filtering, the shader executes a fixed \(3\times3\)
+loop around the current shadow-map coordinate. Each offset is expressed in
+texel units, and nine comparison samples are accumulated and averaged \wingding{6}. This
+produces a smoother visibility estimate at the cost of additional texture
+lookups.
+
+The Poisson-filtered visibility is computed using a fixed set of Poisson disk offsets, with optional per-fragment rotation applied to the sample pattern.
+The loop executes a compile-time constant number of iterations
+(\lstinline{POISSON_TAPS}), accumulating comparison results and normalizing by
+the tap count \wingding{7}. 
+
+Note that \emph{all} texture lookups are executed regardless of which shadow
+filter is ultimately selected. The shader does \textbf{not} branch on
+\lstinline{shadowParams.filterType} before sampling. Instead, it computes
+weights as shown in equation \ref{eq:sm-filter-weight}.
+
+\begin{equation} \label{eq:sm-filter-weight}
+w_i =
+\begin{cases}
+1 & \text{if the filter is selected}, \\
+0 & \text{otherwise}.
+\end{cases}
+\end{equation}
+
+The final visibility is assembled as a weighted sum of all precomputed results. For Poisson filtering, the same accumulated visibility is reused for both fixed and rotated variants. This peculiar structure is required by the WGSL specification, because functions such as \lstinline{textureSampleCompare()} may only be used in fragment shaders, and are
+subject to \emph{uniformity analysis}. If texture sampling occurs inside non-uniform control flow (for example, an \lstinline{if} statement whose condition varies per fragment), the compiler cannot guarantee correct derivative computation, and a \lstinline{derivative_uniformity} diagnostic is triggered. In practice, branching on a per-fragment value like \lstinline{filterType} would make the control flow non-uniform across a quad, violating these rules. By evaluating all shadow samples unconditionally and selecting the desired result using arithmetic masking rather than control flow, the shader remains in uniform control flow for all texture operations. 
+
+Finally, the computed visibility is mixed with 1.0 based on the \lstinline{shadowsEnabled} flag, allowing shadows to be toggled without branching \wingding{8}. The diffuse color is then modulated \wingding{9} by this final visibility and returned as the fragment color.
+
+
+\subsection{main.js}
+
+This section ties together all previously defined components into a  WebGPU shadow mapping application. The \lstinline{main.js} file is responsible for device initialization, resource setup, UI handling, camera updates, and executing the shadow and render passes for each frame. Let's look at the \lstinline{main()} function.
+
+\begin{lstlisting}[caption={main.js, part 1},
+label={lstSM_MainJS1}]
+// main function 
+async function main() {
+
+    // get WebGPU adapter 
+    const adapter = await navigator.gpu?.requestAdapter();
+    // get WebGPU device
+    const device = await adapter?.requestDevice();
+    if (!device) {
+        alert("Couldn't get WebGPU device! Need a browser that supports WebGPU!");
+        return;
+    }
+
+    // get the canvas from the document
+    const canvas = document.querySelector('canvas');
+    // get WebGPU rendering context from the canvas
+    const context = canvas.getContext('webgpu');
+    // configure the context
+    const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+    context.configure({
+        device,
+        format: presentationFormat,
+    });
+
+    // create a common GPUVertexBufferLayout object
+    const vertexBufferLayout = [
+        {
+            attributes: [
+                {
+                    // position 
+                    format: 'float32x3',
+                    offset: 0,
+                    shaderLocation: 0
+                },
+                {
+                    // normal
+                    format: 'float32x3',
+                    offset: 12,
+                    shaderLocation: 1
+                },
+            ],
+            arrayStride: 24, // 6 floats x 4 bytes each 
+        }
+    ];
+\end{lstlisting}
+
+The \lstinline{main()} functiin first requests a GPU adapter and device from the browser and terminates early if WebGPU is not available. The HTML canvas is then queried for a \lstinline{webgpu} rendering context and configured using the browser’s preferred presentation format, ensuring compatibility with the underlying graphics system. The code also defines a shared \lstinline{GPUVertexBufferLayout} that is reused by all render pipelines. Each vertex consists of an interleaved position and normal, stored as two \lstinline{float32x3} attributes with a stride of 24~bytes. Using a common vertex layout guarantees consistent interpretation of geometry data across both the shadow map pass and the main render pass.
+
+\begin{lstlisting}[caption={main.js, part 2},
+label={lstSM_MainJS2}]
+    // common layout for ModelParams
+    const modelParamsBGL = device.createBindGroupLayout({
+        entries: [
+            {
+                binding: 0, // modelParams
+                visibility: GPUShaderStage.VERTEX,
+                buffer: {},
+            },
+        ]
+    });
+
+    // common uniform bind group layout and buffer 
+ 
+    // (buffer, bindGroup) x 3 one for each object type 
+(@\codewingding{1}@)    let modelParamsBGInfo = {};
+    for (let key of ['teapot', 'plane', 'cube']) {
+        // create uniform buffer for modelmat
+        let uniformBuffer = device.createBuffer({
+            size: 144, // 2 * 4 * 16 + 16
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        // create bind group 
+        let uniformBindGroup = device.createBindGroup({
+            label: "model params bind group",
+            layout: modelParamsBGL,
+            entries: [
+                {
+                    binding: 0,
+                    resource: {
+                        buffer: uniformBuffer,
+                    },
+                },
+            ],
+        });
+        // add to object 
+        modelParamsBGInfo[key] = {
+            buffer: uniformBuffer,
+            bindGroup: uniformBindGroup
+        };
+    }
+
+    // function to create shadowmap texture 
+    function createSMTexture(smWidth, smHeight) {
+        const smTexture = device.createTexture({
+            size: [smWidth, smHeight, 1],
+            format: 'depth24plus',
+            usage: GPUTextureUsage.TEXTURE_BINDING |
+                GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+        return smTexture;
+    }
+    // create initial texture 
+    let smTexture = createSMTexture(1024, 1024);
+\end{lstlisting}
+
+This code defines a shared bind group layout for per-object model parameters and instantiates one uniform buffer and bind group per renderable object \wingding{1}. The bind group layout exposes a single uniform buffer at \lstinline{@binding(0)} with vertex-stage visibility, matching the shader’s \lstinline{ModelParams} struct. Each object (teapot, plane, cube) receives its own uniform buffer sized to hold the model matrix, normal matrix, and color, allowing independent transforms while reusing the same pipeline and layout.
+
+The helper function \lstinline{createSMTexture()} allocates the depth texture used as the shadow map. The texture is created with the \lstinline{depth24plus} format and both \lstinline{RENDER\_ATTACHMENT} and \lstinline{TEXTURE\_BINDING} usage flags, enabling it to serve as a depth target during the shadow pass and as a sampled depth texture during the lighting pass. An initial shadow map is created at a fixed resolution, which can later be recreated if the resolution changes. Now let's look at the function that updates model parameters.
+
+\begin{lstlisting}[caption={main.js, part 3},
+label={lstSM_MainJS3}]
+// update ModelParams
+    function updateModelParams(modelParamsBGInfo, key, modelMat, nMat, color) {
+        const data = new Float32Array(36);
+
+        // modelMat (16 floats)
+        data.set(modelMat, 0);
+
+        // nMat (16 floats)
+        data.set(nMat, 16);
+
+        // color (4 floats)
+        data.set(color, 32);
+
+        device.queue.writeBuffer(
+            modelParamsBGInfo[key].buffer,
+            0,
+            data
+        );
+    }
+
+    // create plane
+(@\codewingding{1}@)    const plane = await createPlane(device, 25);
+
+    // create cube
+    const cube = await createCube(device, 5.0);
+
+    // create teapot
+    const teapot = await createTeapot(device);
+
+    // shadow map pipelike
+    let smap;
+    // normal render pipeline
+    let normalRender;
+
+    // shadow debug pipeline
+    let smap_debug;
+
+    // a function to recreate pipelines
+    async function recreatePipelines() {
+        // create shadow map render pipeline
+        smap = await createShadowMap(device, vertexBufferLayout, modelParamsBGL, smTexture);
+
+        // create normal render pipleline
+        normalRender = await createRenderPipeline({
+            device,
+            canvas,
+            context,
+            vertexBufferLayout,
+            modelParamsBGL,
+            smTexture,
+        });
+    }
+    // first creation 
+    await recreatePipelines();
+
+    // shadow debug pipeline
+    smap_debug = await createShadowMapDebug(device, smTexture);   
+\end{lstlisting}
+
+The function \lstinline{updateModelParams()} is responsible for updating the per-object uniform data sent to the GPU before rendering. It constructs a \lstinline{Float32Array} of 36 elements, which corresponds exactly to the memory layout of the \lstinline{ModelParams} uniform struct used in the vertex shader. The first 16 floats store the model matrix, transforming vertices from object space to world space. The next 16 floats store the normal matrix, which is the inverse-transpose of the model matrix and is required to correctly transform surface normals under non-uniform scaling. The final 4 floats store the object color. The packed array is sent to the GPU with a call to \lstinline{device.queue.writeBuffer()}.
+
+The scene geometry is then created by invoking separate helper functions for
+the plane, cube, and Utah teapot \wingding{1}. Each helper loads or generates vertex data,
+creates a GPU vertex buffer, uploads the data, and returns both the buffer and
+the vertex count. These objects share the same vertex layout and pipeline state,
+which simplifies rendering while allowing each object to have independent
+geometry and transforms. Two pipeline objects are declared next -- one for shadow
+map generation, and one for normal rendering with shadow sampling.
+
+Pipeline creation is encapsulated in the \lstinline{recreatePipelines()} function. This function constructs the shadow map pipeline using the current shadow map texture and then builds the main render pipeline that samples from that texture. It also creates the debug pipeline. We have grouped pipeline creation this way because the shadow map texture is part of the pipeline state, and when its resolution changes, all pipelines must be recreated. The function is invoked once during initialization, and again whenever the shadow map texture dimensions are changed. The following listing sets up helper functions and variables used to control camera orientation and shadow parameters at runtime.
+
+\begin{lstlisting}[caption={main.js, part 4},
+label={lstSM_MainJS4}]
+    // compute a reasonable up vector
+    function computeUpVector(eye, target) {
+        const forward = vec3.normalize(
+            vec3.subtract(target, eye)
+        );
+
+        // Choose a world reference that is not parallel to forward
+        const worldUp = Math.abs(forward[2]) > 0.99
+            ? [0, 1, 0]
+            : [0, 0, 1];
+
+        const right = vec3.normalize(
+            vec3.cross(worldUp, forward)
+        );
+
+        const up = vec3.normalize(
+            vec3.cross(forward, right)
+        );
+
+        return up;  
+    }
+
+    // revolving camera 
+    let camTheta = 0.0;
+
+    // enums for filter types 
+    const FilterType = {
+        Nearest:    0,
+        Linear:     1,
+        PCF:        2,
+        Poisson:    3
+    };
+
+    // UI settings
+    const uiSettings = {
+        rotate: false,
+        zoom: false,
+        shadowsEnabled: true,
+        showShadowMap: false,
+        lightPos: [0, 0, 0],
+        shadowMapResolution: 512,
+        frustum: {
+            near: 1,
+            far: 30
+        },
+        culling: false,
+        shadowBias: 0.0,
+        slopeScale: 1.0,
+        slopeBiasEnabled: false,
+        shadowFilter: FilterType.Nearest,
+    };
+
+    // function to update shadow params
+    function updateShadowParams() {
+        const buf = new ArrayBuffer(32);
+
+        // u32 fields
+        const u32 = new Uint32Array(buf);
+        u32[0] = uiSettings.shadowsEnabled ? 1 : 0;    
+        u32[3] = uiSettings.slopeBiasEnabled ? 1 : 0;   
+        u32[4] = uiSettings.shadowFilter;                
+
+        // f32 fields
+        const f32 = new Float32Array(buf);
+        f32[1] = uiSettings.shadowBias;                  // bias
+        f32[2] = uiSettings.slopeScale;                  // slopeScale
+
+        device.queue.writeBuffer(normalRender.shadowParamsBuffer, 0, buf);
+    }
+\end{lstlisting}
+
+The helper function \lstinline{computeUpVector()} computes a stable and \emph{up vector}  given a camera or light position (\lstinline{eye}) and a target point. It first computes the forward direction by normalizing the vector from the eye to the target. A fixed world up axis is then chosen as follows. If the forward direction is nearly parallel to the global $z$ axis, the function switches to the $y$ axis instead. This avoids numerical instability that would occur if the cross product were taken between nearly parallel
+vectors. Using this reference axis, the function constructs an mutually perpendicular set of three vectors (orthonormal basis) by computing a right vector via a cross product, followed by a corrected up vector. This approach ensures that both the camera and the light have a stable orientation even when looking straight up or down, which is especially important for shadow cameras.
+
+The variable \lstinline{camTheta} stores the angular position of a revolving camera and is incremented over time when camera rotation is enabled. This produces smooth orbital motion around the scene and is used to demonstrate how shadows update dynamically as the view changes. The \lstinline{FilterType} object defines integer constants (which match with those in the shader) corresponding to the different shadow filtering modes supported by the fragment shader.
+
+All runtime state is centralized in the \lstinline{uiSettings} object, including camera behavior (rotation and zoom), shadow toggles, debug visualization flags, light position, shadow map resolution, light frustum parameters, face-culling options, and shadow bias controls. Storing this state in a single object simplifies synchronization between the UI and GPU.
+
+The function \lstinline{updateShadowParams()} packs shadow-related parameters into a tightly controlled uniform buffer that mirrors the \lstinline{ShadowParams} struct in the  shader. An \lstinline{ArrayBuffer} of fixed size is used to guarantee correct alignment. Integer-valued fields such as shadow flags and filter type are written through a \lstinline{Uint32Array} view, while floating-point fields such as depth bias and slope scale are written through a \lstinline{Float32Array} view of the same buffer. The buffer is updated using \lstinline{queue.writeBuffer()}. Now let's look at how to hook up the app UI.
+
+\begin{lstlisting}[caption={main.js, part 5},
+label={lstSM_MainJS5}]
+// init UI
+    function initUI() {
+        // rotate
+        uiSettings.rotate = document.querySelector('#rotate').checked;
+        document.querySelector('#rotate').addEventListener('change', e => {
+            uiSettings.rotate = e.target.checked;
+        });
+
+        // zoom 
+        uiSettings.zoom = document.querySelector('#zoom').checked;
+        document.querySelector('#zoom').addEventListener('change', e => {
+            uiSettings.zoom = e.target.checked;
+        });
+
+        // shadows on/off
+        uiSettings.shadowsEnabled = document.querySelector('#shadow_enable').checked;
+        document.querySelector('#shadow_enable').addEventListener('change', e => {
+            uiSettings.shadowsEnabled = e.target.checked;
+            // update shadow params
+            updateShadowParams();
+        });
+
+        // show shadow map
+        uiSettings.showShadowMap = document.querySelector('#show_smap').checked;
+        document.querySelector('#show_smap').addEventListener('change', e => {
+            uiSettings.showShadowMap = e.target.checked;
+        });
+
+        // culling on/off
+        uiSettings.culling = document.querySelector('#culling_enable').checked;
+        document.querySelector('#culling_enable').addEventListener('change', e => {
+            uiSettings.culling = e.target.checked;
+        });
+
+
+        // light position sliders
+        uiSettings.lightPos = {
+            x: parseFloat(document.querySelector('#light_x').value),
+            y: parseFloat(document.querySelector('#light_y').value),
+            z: parseFloat(document.querySelector('#light_z').value),
+        };
+
+        ['x', 'y', 'z'].forEach(axis => {
+            const slider = document.querySelector(`#light_${axis}`);
+            const label  = document.querySelector(`#light_${axis}_label`);
+
+            slider.addEventListener('input', e => {
+                uiSettings.lightPos[axis] = parseFloat(e.target.value);
+                label.textContent = e.target.value;
+            });
+        });
+
+        // shadow map resolution
+        uiSettings.shadowMapResolution = parseInt(
+            document.querySelector('input[name="smap_res"]:checked').value
+        );
+        document.querySelectorAll('input[name="smap_res"]').forEach(radio => {
+            radio.addEventListener('change', async e => {
+                uiSettings.shadowMapResolution = parseInt(e.target.value);
+                // recreate texture
+                smTexture = createSMTexture(uiSettings.shadowMapResolution, uiSettings.shadowMapResolution);
+                // recreate pipeline
+                await recreatePipelines();
+                // update shadow params
+                updateShadowParams();
+            });
+        });
+
+        
+        // bias
+        uiSettings.shadowBias = parseFloat(
+            document.querySelector('#shadow_bias').value
+        );
+        {
+            const slider = document.querySelector('#shadow_bias');
+            const label  = document.querySelector('#shadow_bias_label');
+
+            slider.addEventListener('input', e => {
+                uiSettings.shadowBias = parseFloat(e.target.value);
+                label.textContent = e.target.value;
+                // update shadow params
+                updateShadowParams();
+            });
+        }
+
+        // slope bias enable
+        uiSettings.slopeBiasEnabled =
+            document.querySelector('#slope_bias_enabled').checked;
+        {
+            const checkbox = document.querySelector('#slope_bias_enabled');
+
+            checkbox.addEventListener('change', e => {
+                uiSettings.slopeBiasEnabled = e.target.checked;
+                // update shadow params
+                updateShadowParams();
+            });
+        }
+
+        // slope scale
+        uiSettings.slopeScale = parseFloat(
+            document.querySelector('#slope_scale').value
+        );
+        {
+            const slider = document.querySelector('#slope_scale');
+            const label  = document.querySelector('#slope_scale_label');
+
+            slider.addEventListener('input', e => {
+                uiSettings.slopeScale = parseFloat(e.target.value);
+                label.textContent = e.target.value;
+                // update shadow params
+                updateShadowParams();
+            });
+        }
+
+        // filtering
+        uiSettings.shadowFilter = FilterType[
+            document.querySelector('input[name="filtering"]:checked').value
+        ];
+
+        document.querySelectorAll('input[name="filtering"]').forEach(radio => {
+            radio.addEventListener('change', e => {
+                uiSettings.shadowFilter = FilterType[e.target.value];
+                // update shadow params
+                updateShadowParams();
+            });
+        });
+
+    }
+    // call init 
+    initUI();
+    // update shadow params
+    updateShadowParams();
+\end{lstlisting}
+
+The \lstinline{initUI()} function initializes all user interface controls and connects them to the application’s runtime state. Each UI element reads its initial value from the DOM and updates the corresponding field in the \lstinline{uiSettings} object. Simple toggles such as camera rotation, zoom, shadow enablement, shadow-map visualization, and face culling are implemented using checkboxes whose change events update state immediately. 
+
+The light position controls are implemented as three independent sliders for the \(x\), \(y\), and \(z\) coordinates. Each slider updates both the stored light position and its on-screen label in real time. The shadow map resolution is controlled via a radio-button group; changing this value recreates the depth texture and both render pipelines, since the shadow map texture is part of the pipeline state. After recreation, the shadow parameter uniform buffer is updated.
+
+The constant depth bias, slope-scale factor, and slope-bias enable flag are all connected to sliders or checkboxes. Any change immediately calls \lstinline{updateShadowParams()}, repacking the uniform buffer used by the fragment shader. Finally, the shadow filtering mode is selected using a radio group mapped directly to the integer values expected by the shader. The final calls to \lstinline{initUI()} and \lstinline{updateShadowParams()} ensure that the GPU state reflects the UI defaults before the first frame is rendered.
+
+After initializing the user interface and synchronizing the shadow parameters, the next step is to update the camera and light-space transforms used by both the shadow pass and the main render pass. 
+
+\begin{lstlisting}[caption={main.js, part 6},
+label={lstSM_MainJS6}]
+    / Update shadow map uniforms
+    function updateView(isShadow) {
+
+        // compute camera matrices:
+
+        // camera parameters 
+        const cameraParams = {
+            // look at params
+            eye: [0, -5, 5],
+            target: [0.0, 0.0, 0.0], 
+            up: [0, 0, 1],
+            // perspective projection params
+            fov: uiSettings.zoom ? 5: 50,
+            aspect: canvas.width / canvas.height,
+            near: 1.0,
+            far: 50.0,
+            // rotation params
+            theta: 0.0,
+            height: 10.0,
+            radius: 15.0,
+        }
+
+        // update theta 
+        if (uiSettings.rotate) {
+            camTheta += 0.005;
+        }
+        // update eye 
+        cameraParams.eye = [cameraParams.radius * Math.cos(camTheta), 
+                cameraParams.radius * Math.sin(camTheta), cameraParams.height];
+
+        // compute up vector 
+        cameraParams.up = computeUpVector(new Float32Array(cameraParams.eye), new Float32Array(cameraParams.target));
+
+        // create lookAt matrix
+        let lookAtMat = mat4.lookAt(cameraParams.eye, cameraParams.target, cameraParams.up);
+
+        // create projection matrix 
+        const projMat = mat4.perspective(
+            cameraParams.fov * Math.PI/180,
+            cameraParams.aspect,
+            cameraParams.near,
+            cameraParams.far
+        );
+
+        // light parameters 
+        const lightParams = {
+            // look at params
+            eye: [uiSettings.lightPos.x, uiSettings.lightPos.y, uiSettings.lightPos.z],
+            target: [0.0, 0.0, 0.0], 
+            up: [0, 0, 1],
+            // orthographic projection params
+            left: -10,
+            right: 10,
+            bottom: -10,
+            top: 10,
+            near: uiSettings.frustum.near,
+            far: uiSettings.frustum.far
+        }
+
+        // compute a better up vector
+        lightParams.up = computeUpVector(new Float32Array(lightParams.eye), new Float32Array(lightParams.target));
+
+        // create look at matrix for shadow
+        const slookAtMat = mat4.lookAt(lightParams.eye, lightParams.target, lightParams.up);
+        // create projection matrix for shadow
+        const sprojMat = mat4.ortho(lightParams.left, lightParams.right, 
+            lightParams.bottom, lightParams.top, lightParams.near, lightParams.far);
+
+        if (isShadow) {
+            // write camera uniform
+            smap.writeUniformBuffer(sprojMat, slookAtMat);
+        }
+        else {
+
+            let shadowMat = mat4.multiply(sprojMat, slookAtMat);
+
+            // bias matrix - maps xy from [-1, 1] to [0, 1]
+            let biasMat = mat4.create(
+                0.5, 0.0, 0.0, 0.0, 
+                0.0, -0.5, 0.0, 0.0, 
+                0.0, 0.0, 1.0, 0.0, 
+                0.5, 0.5, 0.0, 1.0
+            );
+            // apply bias matrix
+            shadowMat = mat4.multiply(biasMat, shadowMat);
+
+            // write camera uniform
+            let lightPosA = [uiSettings.lightPos.x, uiSettings.lightPos.y, uiSettings.lightPos.z];
+            normalRender.writeToCameraBuffer(projMat, lookAtMat, shadowMat, lightPosA);
+        }
+
+        // write modeparams for cube
+        let color = [0.0, 1.0, 0.0, 1.0];
+        // scale and translate 
+        let modelMatCube = mat4.identity();
+        modelMatCube = mat4.scale(modelMatCube, [1, 1, 10]);
+        modelMatCube = mat4.translate(modelMatCube, [4, 4, 0]);
+        // create normal matrix - in world space
+        let nMat = mat4.transpose(mat4.inverse(modelMatCube));
+        updateModelParams(modelParamsBGInfo, 'cube', modelMatCube, nMat, color);
+
+        // write modeparams for plane
+        color = [1.0, 1.0, 0.0, 1.0];
+        let modelMatPlane = mat4.identity();
+        nMat = mat4.transpose(mat4.inverse(modelMatPlane));
+        updateModelParams(modelParamsBGInfo, 'plane', modelMatPlane, nMat, color);
+
+        // write modeparams for teapot
+        color = [1.0, 0.0, 0.0, 1.0];
+        // apply rotation to set it right side up
+        let modelMatTeapot = mat4.identity();
+        modelMatTeapot = mat4.rotate(modelMatTeapot, [1, 0, 0], utils.degToRad(90));
+        nMat = mat4.transpose(mat4.inverse(modelMatTeapot));
+        updateModelParams(modelParamsBGInfo, 'teapot', modelMatTeapot, nMat, color);
+    }
+\end{lstlisting}
+
+The function \lstinline{updateView()} updates all camera, light, and
+object (model) related uniforms for either the shadow pass or the main render pass,
+depending on the value of \lstinline{isShadow}. It first constructs the main camera parameters, including eye position, target, projection settings, and orbit controls. When rotation is enabled, the camera revolves smoothly around the scene by updating the angle  \lstinline{camTheta}. A stable up vector is computed using \lstinline{computeUpVector()}, after which the view matrix is created using \lstinline{mat4.lookAt()} and the perspective
+projection matrix is generated based on the current zoom setting and canvas aspect ratio.
+
+The function then computes the light’s camera used for shadow mapping. The light is treated as a directional source using an orthographic projection, defined by explicit left, right, top, bottom, near, and far values that control the shadow frustum. A separate look-at matrix and projection matrix are created for the light. If \lstinline{isShadow} is true, only these light-space matrices are written to the shadow pipeline’s uniform buffer, since the shadow pass requires only depth rendering from the light’s point of view.
+
+When rendering the main scene, the function additionally constructs the shadow transformation matrix by multiplying the light projection and view matrices and
+then applying a bias matrix. This bias maps coordinates from clip space \([-1,1]\) into texture space \([0,1]\), making them directly usable for shadow map sampling in the fragment shader. The main camera projection matrix, view matrix, biased shadow matrix, and world-space light position are then written to the render pipeline’s uniform buffer. Finally, the function updates the model, normal, and color parameters for each object in the scene. The cube is scaled and translated, the plane remains untransformed, and the teapot is rotated into an upright orientation. Computing and uploading these transforms
+each frame ensures that both the shadow pass and render pass are consistent with each other. Now let's look at the main render function.
+
+\begin{lstlisting}[caption={main.js, part 7},
+label={lstSM_MainJS7}]
+// define render function 
+    function render() {
+        // make a command encoder to start encoding commands
+        const encoder = device.createCommandEncoder({ label: 'main encoder' });
+
+        if (uiSettings.shadowsEnabled ) {
+            // render shadow casters:
+
+            updateView(true);
+        
+            // begin shadow pass
+            const shadowPass = encoder.beginRenderPass(smap.renderPassDescriptor);
+
+            // common settings:
+
+            // set camera bind group
+            shadowPass.setBindGroup(0, smap.bindGroup);
+            // set the render pipeline
+            shadowPass.setPipeline(uiSettings.culling ? smap.pipelineCull : smap.pipeline);
+
+            // render cube:
+
+            // set modelparams bind group
+            shadowPass.setBindGroup(1, modelParamsBGInfo['cube'].bindGroup);
+            // set vertex buffer
+            shadowPass.setVertexBuffer(0, cube.vertexBuffer);
+            // draw 
+            shadowPass.draw(cube.count);
+
+            // render teapot:
+
+            // set modelparams bind group
+            shadowPass.setBindGroup(1, modelParamsBGInfo['teapot'].bindGroup);
+            // set vertex buffer
+            shadowPass.setVertexBuffer(0, teapot.vertexBuffer);
+            // draw 
+            shadowPass.draw(teapot.count);
+
+            // end shadow pass
+            shadowPass.end();
+        }
+
+        // display shadow map 
+        if (uiSettings.showShadowMap) {
+            const pass = encoder.beginRenderPass({
+                colorAttachments: [{
+                    view: context.getCurrentTexture().createView(),
+                    loadOp: "clear",
+                    storeOp: "store",
+                    clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                }],
+            });
+
+            pass.setPipeline(smap_debug.pipeline);
+            pass.setBindGroup(0, smap_debug.bindGroup);
+            pass.draw(6);
+            pass.end();
+        }
+        else {
+
+            // render objects with shadow:
+
+            updateView(false);
+
+            // set view 
+            normalRender.renderPassDescriptor.colorAttachments[0].view = 
+                context.getCurrentTexture().createView();
+
+            // make a render pass encoder
+            const pass = encoder.beginRenderPass(normalRender.renderPassDescriptor);
+
+            // common settings:
+
+            // set camera bind group
+            let bg = uiSettings.shadowFilter == FilterType.Nearest ? 
+                normalRender.bindGroupNearest : normalRender.bindGroupLinear;
+            pass.setBindGroup(0, bg);
+            // set the render pipeline
+            pass.setPipeline(normalRender.pipeline);
+
+            // render plane:
+
+            // set modelparams bind group
+            pass.setBindGroup(1, modelParamsBGInfo['plane'].bindGroup);
+            // set vertex buffer
+            pass.setVertexBuffer(0, plane.vertexBuffer);
+            // draw 
+            pass.draw(plane.count);
+
+            
+            // render cube:
+
+            // set modeldat bind group
+            pass.setBindGroup(1, modelParamsBGInfo['cube'].bindGroup);
+            // set vertex buffer
+            pass.setVertexBuffer(0, cube.vertexBuffer);
+            // draw 
+            pass.draw(cube.count);
+
+            // render teapot:
+
+            // set modeldat bind group
+            pass.setBindGroup(1, modelParamsBGInfo['teapot'].bindGroup);
+            // set vertex buffer
+            pass.setVertexBuffer(0, teapot.vertexBuffer);
+            // draw 
+            pass.draw(teapot.count);
+
+            // end render pass
+            pass.end();
+        
+        }
+
+        // end commands 
+        const commandBuffer = encoder.finish();
+        // submit to GPU queue
+        device.queue.submit([commandBuffer]);
+
+        // request animation
+        requestAnimationFrame(render);
+    }
+
+    // request animation
+    requestAnimationFrame(render);
+}
+
+// call main function 
+main();
+\end{lstlisting}
+
+The \lstinline{render()} function defines the complete frame-level control flow of the app, and each call corresponds to one animation frame. The function begins by creating a \lstinline{GPUCommandEncoder}. This encoder is used to record multiple render passes—potentially both a shadow pass and a scene or debug pass—into a single command buffer. Using one encoder ensures that all passes for a frame are submitted together and executed in the correct order on the GPU.
+
+The first conditional branch checks whether shadows are enabled. If so, the shadow map pass is executed. The call to \lstinline{updateView(true)} updates the light’s view and projection matrices and uploads them to the shadow camera uniform buffer. A depth-only render pass is then begun using \lstinline{smap.renderPassDescriptor}, which contains no color attachments and writes only to the shadow map depth texture. The shadow camera bind group is bound at group~0, followed by selection of the appropriate shadow pipeline. If face culling is enabled, the front-face culling pipeline is used to reduce self-shadowing artifacts. Otherwise, the non-culling pipeline is selected. Shadow-casting geometry is rendered next. The cube and the teapot are each drawn by binding their per-object model parameter bind group at group~1, binding the corresponding vertex buffer, and issuing a draw call. The shadow pass is then explicitly ended, finalizing the depth texture for use later in the frame.
+
+After the shadow pass, the function diverges into one of two mutually exclusive branches depending on whether shadow map visualization is enabled. If \lstinline{uiSettings.showShadowMap} is true, a simple render pass is created
+that targets the current view texture. This pass uses a minimal pipeline designed for debugging. The debug pipeline and its bind group, which contains the shadow map texture, are bound, and a single draw call renders a full-screen quad. The fragment shader in this pipeline directly samples the depth texture and displays it as grayscale, allowing inspection of the shadow map. No scene geometry is rendered in this path.
+
+If shadow map visualization is disabled, the function proceeds with the normal scene rendering path. It first calls \lstinline{updateView(false)} to update the main camera’s view and projection matrices, compute the biased light-space shadow matrix, and upload the light position. The render pass descriptor’s color attachment is updated with the current swap-chain texture view, and a render pass is begun. At this point, the camera bind group is selected based on the active shadow filtering mode. Two bind groups exist—one using nearest filtering and one using linear filtering—and selecting between them allows shadow quality to change without switching pipelines. The main render pipeline is then bound.
+
+Scene geometry is rendered in sequence within this render pass. The plane is drawn first as the primary shadow receiver. Its model parameter bind group is bound, its vertex buffer is set, and a draw call is issued. The cube and teapot are rendered next as both shadow casters and receivers, each with its own model parameter bind group but sharing the same pipeline and camera state. Depth testing ensures correct occlusion between objects, and the fragment shader samples the shadow map to modulate lighting appropriately. Once all objects are rendered, the render pass is ended.
+
+After all active passes have been recorded, the command encoder is finalized into a \lstinline{GPUCommandBuffer} and submitted to the GPU queue. Finally, \lstinline{requestAnimationFrame(render)} schedules the next frame, ensuring continuous execution of the render loop.
+
+\subsection{Running the Code}
+
+To run the code, first start the server at the root directory of the book's code folder.
+
+\begin{lstlisting}
+    http-server -c 1
+\end{lstlisting}
+
+Now open the following URL in your browser: 
+
+\emph{http://localhost:8080/ch6\_shadows/shadows/}.
+
+You should see an output similar to figure \ref{fig:sm-app1}. Try moving the light position and toggling different shadow filtering modes to observe how shadow quality and softness change. Experiment with the shadow map resolution and bias parameters to see how they affect aliasing, self-shadowing, and overall look. The debug output of the shadow map is shown in figure \ref{fig:sm-app-debug}.
+
+\begin {figure} [htp!]
+    \centering
+    \includegraphics[width=10cm, height=6cm, keepaspectratio]{ch6_sm_figures/sm-app-debug.png}
+    \caption{Debugging the WebGPU Shadow Mapping App}
+    \label{fig:sm-app-debug}
+\end{figure}
+
+
+\section{Summary}
+
+In this chapter, we implemented shadow mapping in a WebGPU app. We built a two-pass rendering pipeline consisting of a depth-only shadow pass from the light’s point of view, followed by a shaded render pass that samples the generated shadow map. We also added a debug visualization pipeline to inspect the shadow map directly. Along the way, we explored practical issues such as depth biasing, face culling, and different shadow filtering strategies. Here's a list of the core concepts we covered.
+
+\begin{enumerate}
+    \item Shadow mapping as a two-pass rendering algorithm.
+    \item Rendering depth from the light’s perspective using a depth-only pass.
+    \item Transforming world-space positions into the light's clip space.
+    \item Shadow bias and slope-scale bias to reduce self-shadowing artifacts.
+    \item Comparison sampling of depth textures for shadow tests.
+    \item Nearest, linear, PCF, and Poisson-filtered shadow lookups.
+    \item Debug visualization of shadow maps using a screen-aligned quad.
+\end{enumerate}
+
+\subsection{WebGPU Features}
+
+Here is a list of the major WebGPU features we used in this chapter.
+
+\begin{enumerate}
+    \item Depth-only render passes using
+          \lstinline{GPURenderPassDescriptor.depthStencilAttachment}.
+    \item Creation of depth textures with
+          \lstinline{GPUTextureUsage.RENDER_ATTACHMENT} and
+          \lstinline{GPUTextureUsage.TEXTURE_BINDING}.
+    \item Multiple render pipelines to support different culling modes.
+    \item Comparison samplers created with
+          \lstinline{GPUSamplerDescriptor.compare}.
+    \item Sampling depth textures in fragment shaders via bind group layouts
+          with \lstinline{texture.sampleType = "depth"}.
+    \item Use of multiple bind groups to separate camera-level and model-level
+          uniforms.
+    \item Dynamic recreation of pipelines and textures when shadow map
+          resolution changes.
+\end{enumerate}
+
+\subsection{WGSL Features}
+
+The WGSL shaders in this chapter some new language features.
+
+\begin{enumerate}
+    \item Depth-only vertex shaders with no fragment stage.
+    \item Use of \lstinline{sampler_comparison} and
+          \lstinline{texture_depth_2d} for shadow testing.
+    \item Manual percentage-closer filtering implemented in WGSL loops.
+    \item Branch-free filter selection using arithmetic masking.
+    \item Use of \lstinline{@builtin(vertex_index)} to generate geometry
+          procedurally in the debug pass.
+    \item World-space lighting calculations combined with shadow visibility.
+\end{enumerate}
+
+\section{Homework}
+
+\begin{itemize}
+
+    \item \textbf{Local Lights} \\
+    Modify the shadow map pass to support a local point light using a
+    perspective projection instead of an orthographic one. Analyze how the
+    light frustum affects shadows.
+
+    \item \textbf{Casters \& Receivers} \\
+    Separate shadow casters and receivers in the scene. Allow certain
+    objects to cast shadows without receiving them, and vice versa, and
+    observe how this changes both performance and visual realism.
+
+    \item \textbf{Planar Shadows}  \\
+    We've seen how shadow mapping can cast shadows on curved surfaces. In this homework, you'll use what you learned about projections to implement a simpler technique for casting shadows on planar surfaces.
+
+    \begin {figure} [htp!]
+        \centering
+        \includegraphics[width=10cm, height=6cm, keepaspectratio]{ch6_sm_figures/sm-shadows-planar.png}
+        \caption{Planar shadows}
+        \label{fig:sm-planar}
+    \end{figure}
+    
+    Consider a point light located at position $\mathbf{l}$ and a vertex 
+    $\mathbf{v}$ on a shadow-casting object. The shadow of $\mathbf{v}$ is
+    obtained by intersecting the ray originating at $\mathbf{l}$ and passing
+    through $\mathbf{v}$ with a receiving plane. For a general plane
+    \[
+        \pi : \mathbf{n} \cdot \mathbf{x} + d = 0,
+    \]
+    the projected point $\mathbf{p}$ is given by
+    \[
+        \mathbf{p} =
+        \mathbf{l} -
+        \frac{\mathbf{n} \cdot \mathbf{l} + d}
+             {\mathbf{n} \cdot (\mathbf{v} - \mathbf{l})}
+        (\mathbf{v} - \mathbf{l}).
+    \]
+    This expression follows directly from intersecting the light ray with the
+    plane, as illustrated in the attached figures. The projection equation above can be rewritten as a $4 \times 4$ matrix
+    
+    $\mathbf{M}$ such that
+    \[
+        \mathbf{M}\,\mathbf{v} = \mathbf{p}.
+    \]
+    For a plane $\pi : \mathbf{n} \cdot \mathbf{x} + d = 0$ and a point light
+    $\mathbf{l} = (l_x, l_y, l_z, 1)$, the matrix takes the form
+    \[
+        \mathbf{M} =
+        \begin{pmatrix}
+            \mathbf{n}\!\cdot\!\mathbf{l}+d - l_x n_x & -l_x n_y & -l_x n_z & -l_x d \\
+            -l_y n_x & \mathbf{n}\!\cdot\!\mathbf{l}+d - l_y n_y & -l_y n_z & -l_y d \\
+            -l_z n_x & -l_z n_y & \mathbf{n}\!\cdot\!\mathbf{l}+d - l_z n_z & -l_z d \\
+            -n_x     & -n_y     & -n_z     & \mathbf{n}\!\cdot\!\mathbf{l}
+        \end{pmatrix}.
+    \]
+    Question 1: Verify that this reduces to a very simple matrix when
+    the receiving plane is $y = 0$ (i.e.\ $\mathbf{n} = (0,1,0)$ and $d = 0$).
+
+    Question 2: Implement planar shadows using a second render pass:
+    \begin{enumerate}
+        \item Render the scene normally.
+        \item Disable lighting and depth writes.
+        \item Render the shadow-casting objects again, but multiply their model
+              matrices by the planar shadow projection matrix.
+        \item Use a constant dark color for the projected geometry.
+    \end{enumerate}
+    
+    To avoid z-fighting between the shadow and the receiver plane, either add
+    a small bias along the plane normal or render the receiver first and then
+    draw the projected geometry with depth testing disabled. What will happen when the light source moves below the topmost point of an object? Add a simple check to disable planar shadows when $\mathbf{n} \cdot (\mathbf{v} - \mathbf{l}) \ge 0$, or when the caster lies entirely below the receiving plane.
+\end{itemize}
+
+\section{References}
+
+\begin{enumerate}
+
+    \item Khronos Group. \emph{OpenGL 4.5 Core Profile Specification},
+    Section 14.6.5, “Depth Offset.”
+
+    \item Martin Newell. \emph{Utah Teapot Model}, University of Utah,
+    1975.
+
+    \item Robert Bridson. “Fast Poisson Disk Sampling in Arbitrary
+    Dimensions.” University of British Columbia, 2007.
+
+    \item Alain Galvan. “A Survey of Noise Generation Techniques.”
+    \url{https://alain.xyz/blog/noise-generation-survey}
+
+\end{enumerate}
+
