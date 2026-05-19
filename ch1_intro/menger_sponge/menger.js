@@ -236,7 +236,7 @@ async function main() {
     }
 
     // create vertex buffer
-    let currLevel = 0;
+    let currLevel = 2;
     let vertexBuffer = createVertexBuffer(currLevel);
     let nVertices = vertexBuffer.size / 24; // 6 x 4 bytes each 
 
