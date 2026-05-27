@@ -13,7 +13,6 @@ import { createPlane } from './plane.js';
 import { createTeapot } from './teapot.js';
 import { createShadowMap, createShadowMapDebug } from './shadow.js';
 import { createRenderPipeline } from './render.js';
-import { createSphere } from './sphere.js';
 
 // main function 
 async function main() {
