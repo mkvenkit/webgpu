@@ -130,9 +130,9 @@ async function main() {
     });
 
     // create torus
-    let r = 3;
-    let R = 10;
-    const torus = await createTorus(r, R, device);
+    let tubeRadius = 3;
+    let centerRadius = 10;
+    const torus = await createTorus(tubeRadius, centerRadius, device);
 
     // create plane
     const plane = await createPlane(26, device);
@@ -174,26 +174,25 @@ async function main() {
     let col_spot = hexStrToRGBFloat(def_col_spot);
 
     function updateCols(event) {
-        if (event.target.id == "mat_col_torus") {
+        if (event.target.id == "matColorTorus") {
             col_torus = hexStrToRGBFloat(event.target.value);
         }
-        else if (event.target.id == "mat_col_plane") {
+        else if (event.target.id == "matColorPlane") {
             col_plane = hexStrToRGBFloat(event.target.value);
         }
         else if (event.target.id == "spot_col") {
             col_spot = hexStrToRGBFloat(event.target.value);
         }
-        //console.log(col_torus);
     }
 
     // color picker for torus
-    const colorPickerTorus = document.querySelector("#mat_col_torus");
+    const colorPickerTorus = document.querySelector("#matColorTorus");
     colorPickerTorus.value = def_col_torus;
     colorPickerTorus.addEventListener("input", updateCols);
     colorPickerTorus.select();
 
     // color picker for plane
-    const colorPickerPlane = document.querySelector("#mat_col_plane");
+    const colorPickerPlane = document.querySelector("#matColorPlane");
     colorPickerPlane.value = def_col_plane;
     colorPickerPlane.addEventListener("input", updateCols);
     colorPickerPlane.select();
@@ -264,8 +263,11 @@ async function main() {
     let showPlane = document.querySelector('#show_plane').checked;
     let showAxis = document.querySelector('#show_axis').checked;
 
-    // time step
-    let timeStep = 0.0;
+    // time, in seconds/2, used to drive all animation
+    // measured from page load, not from the epoch: camera.timeStep is an f32
+    // uniform, and Date.now() alone is too large for f32 to hold any fractional
+    // precision, which would leave the animation frozen on the GPU
+    const startTime = Date.now();
     let now = 0;
 
     // Update camera parameters 
@@ -287,13 +289,11 @@ async function main() {
             100
         );
 
+        // update time
+        now = (Date.now() - startTime) / 2000;
+
         // Is rotate checked?
         let rotate = document.querySelector('#rotate').checked;
-        if (rotate) {
-            // update time 
-            now = Date.now() / 2000;
-        }
-
         let modelMat = mat4.identity();
         if (rotate) {
             modelMat = mat4.rotation(vec3.fromValues(Math.sin(now), Math.cos(now), 0),
@@ -303,10 +303,10 @@ async function main() {
         let mvMat = mat4.multiply(lookAtMat, modelMat);
         let nMat = mat4.create();
         nMat = mat4.transpose(mat4.inverse(mvMat));
-    
+
         // write matrices to GPU
-        writeMatrices(device, torus.cameraBuffer, modelMat, lookAtMat, projMat, nMat, timeStep);
-        writeMatrices(device, plane.cameraBuffer, modelMat, lookAtMat, projMat, nMat, timeStep);
+        writeMatrices(device, torus.cameraBuffer, modelMat, lookAtMat, projMat, nMat, now);
+        writeMatrices(device, plane.cameraBuffer, modelMat, lookAtMat, projMat, nMat, now);
         writeMatrices(device, axis.cameraBuffer, null, lookAtMat, projMat, null, null);
 
     }
@@ -386,38 +386,17 @@ async function main() {
                 flags[0] |= LightingFlags.SpotLightOscillate;
             }
 
-            // write to GPU
+            // pack the flags and both cone cosines into one 12-byte write
             offset += 16;
-            device.queue.writeBuffer(
-                obj.lightingBuffer,
-                offset,
-                flags,
-                0,
-                1
-            );
-
             var cos_theta_o = Math.cos(outerCone * Math.PI/180.0);
-            var cos_theta_i = Math.cos((1 - innerConePercent/100.0) * outerCone * Math.PI/180.0);
-                            
-            // outer cone 
-            offset += 4;
-            device.queue.writeBuffer(
-                obj.lightingBuffer,
-                offset,
-                new Float32Array([cos_theta_o]),
-                0,
-                1
-            );
-
-            // inner cone 
-            offset += 4;
-            device.queue.writeBuffer(
-                obj.lightingBuffer,
-                offset,
-                new Float32Array([cos_theta_i]),
-                0,
-                1
-            );
+            var cos_theta_i = Math.cos((1 - innerConePercent/100.0) *
+                                       outerCone * Math.PI/180.0);
+            const spot = new ArrayBuffer(12);
+            const view = new DataView(spot);
+            view.setUint32(0, flags[0], true);    // u32
+            view.setFloat32(4, cos_theta_o, true); // f32
+            view.setFloat32(8, cos_theta_i, true); // f32
+            device.queue.writeBuffer(obj.lightingBuffer, offset, spot);
 
         }
 
@@ -439,9 +418,6 @@ async function main() {
         const encoder = device.createCommandEncoder({ label: 'torus encoder' });
         // make a render pass encoder to encode render specific commands
         const pass = encoder.beginRenderPass(renderPassDescriptor);
-
-        // increment time step
-        timeStep += 1;
 
         // update camera params for frame
         updateCamera();
