@@ -1,7 +1,8 @@
 // ----------------------------------------------------------------------
 // transparent.wgsl
 // 
-// Shader for transparenet objects that initializes the data structures.
+// Shader for transparent objects: adds each fragment to the
+// per-pixel linked list instead of writing a color.
 // 
 // Author: Mahesh Venkitachalam
 // 
@@ -27,17 +28,23 @@ struct HeadsBuffer
     image_buffer: array<atomic<u32>>
 }
 
+// a node in a per-pixel linked list
+struct Node {
+    next: u32,      // index of the next node, or 0xffffffff at the end
+    color: u32,     // RGBA color packed into 4 x 8 bits
+    depth: f32,     // fragment depth
+}
+
 // structure for rendering parameters
 struct RenderParams {
-    windowSize: vec2u,                  // (w, h) 8 bytes
-    usePremultipliedAlpha: u32,         // 4 bytes
-    _pad0: u32,                         // padding to make total 16 bytes
+    windowSize: vec2u,
+    usePremultipliedAlpha: u32,
 };
 
-// define uniform to hold mvp matrix
+// define uniforms and storage buffers
 @group(0) @binding(0) var<uniform> camera : Camera;
 @group(0) @binding(1) var<storage, read_write> headsBuffer : HeadsBuffer;
-@group(0) @binding(2) var<storage, read_write> linkedListBuffer : array<vec4u>;
+@group(0) @binding(2) var<storage, read_write> linkedListBuffer : array<Node>;
 @group(0) @binding(3) var depthTexture: texture_depth_2d;
 @group(0) @binding(4) var<uniform> params : RenderParams;
 
@@ -54,7 +61,7 @@ struct RenderParams {
 }
 
 // fragment shader entry 
-@fragment fn fragment_main(fragData: VertexOut,)
+@fragment fn fragment_main(fragData: VertexOut)
 {
     // get fragment (integer) coordinate
     let fragCoord = vec2<u32>(fragData.position.xy);
@@ -67,33 +74,24 @@ struct RenderParams {
 
     // get fragment index in image buffer
     // i = y * width + x
-    var index = fragCoord.y * params.windowSize.x + fragCoord.x;
+    let index = fragCoord.y * params.windowSize.x + fragCoord.x;
 
-    // increment counter atomically 
-    var count = atomicAdd(&headsBuffer.index_counter, 1u);
+    // allocate a node by incrementing the counter atomically
+    let count = atomicAdd(&headsBuffer.index_counter, 1u);
+    // drop the fragment if the linked list buffer is full
+    if (count >= arrayLength(&linkedListBuffer)) {
+        return;
+    }
 
-    // exchange old head and new atomically
-    var old_head = atomicExchange(&headsBuffer.image_buffer[index], count);
+    // make the new node the head of this pixel's list
+    let old_head = atomicExchange(&headsBuffer.image_buffer[index], count);
 
-    // create linked list item
-    var item : vec4u;
-    // next 
-    item.x = old_head;
-    
-    // set color:
-
-    // using premultiplied alpha ?
+    // set color, pre-multiplied if requested
+    var color = fragData.color;
     if (params.usePremultipliedAlpha != 0u) {
-        item.y = pack4x8unorm(vec4f(fragData.color.rgb * fragData.color.a, fragData.color.a));
+        color = vec4f(color.rgb * color.a, color.a);
     }
-    else {
-        item.y = pack4x8unorm(fragData.color);
-    }
-    // depth 
-    item.z = bitcast<u32>(fragData.position.z);
-    // w - unused
-    item.w = 0;
 
-    // update linked list 
-    linkedListBuffer[count] = item;
+    // write the linked list node
+    linkedListBuffer[count] = Node(old_head, pack4x8unorm(color), fragData.position.z);
 }

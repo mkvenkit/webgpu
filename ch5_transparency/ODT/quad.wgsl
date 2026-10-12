@@ -1,7 +1,9 @@
 // ----------------------------------------------------------------------
-// opaque.wgsl
+// quad.wgsl
 // 
-// Opaque shader for ODT.
+// Shaders for both the opaque and transparent quads in ODT. Blending
+// is set in the pipeline, so the opaque quad (alpha 1) and the
+// transparent quads use the same code.
 // 
 // Author: Mahesh Venkitachalam
 // 
@@ -16,11 +18,17 @@ struct VertexOut {
 // define a struct to hold camera parameters
 struct Camera {
     mvMat: mat4x4<f32>,
-    projMat: mat4x4<f32>
+    projMat: mat4x4<f32>,
 }
 
-// define uniform to hold mvp matrix
+// define a struct to hold render parameters
+struct RenderParams {
+    usePremultipliedAlpha: u32
+};
+
+// define uniforms
 @group(0) @binding(0) var<uniform> camera : Camera;
+@group(0) @binding(1) var<uniform> params : RenderParams;
 
 // vertex shader entry 
 @vertex fn vertex_main(
@@ -37,5 +45,10 @@ struct Camera {
 // fragment shader entry 
 @fragment fn fragment_main(fragData: VertexOut) -> @location(0) vec4f 
 {    
-    return fragData.color;
+    if (params.usePremultipliedAlpha != 0u) {
+        return vec4f(fragData.color.rgb * fragData.color.a, fragData.color.a);
+    }
+    else {
+        return fragData.color;
+    }
 }

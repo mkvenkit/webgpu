@@ -9,7 +9,7 @@
 
 // imports from wgpu-matrix 
 import {vec3, mat4} from '../../common/wgpu-matrix.module.js';
-import { createOpaquePipeline, createTransparentPipeline } from './mesh.js';
+import { createSharedResources, createOpaquePipeline, createTransparentPipeline } from './mesh.js';
 
 // main function 
 async function main() {
@@ -42,9 +42,30 @@ async function main() {
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     });
 
-    // create objects
-    const opaque = await createOpaquePipeline(device, depthTexture);
-    const transparent = await createTransparentPipeline(device, depthTexture);
+    // create a GPURenderPassDescriptor object
+    // (opaque and transparent quads are drawn in the same render pass)
+    const renderPassDescriptor = {
+        colorAttachments: [{
+          clearValue:  { r: 0.2, g: 0.2, b: 0.2, a: 1.0 },
+          loadOp: 'clear',
+          storeOp: 'store',
+          view: undefined
+        }],
+        depthStencilAttachment: {
+            view: depthTexture.createView(),
+            depthClearValue: 1.0,
+            depthLoadOp: 'clear',
+            depthStoreOp: 'store',
+        },
+    };
+
+    // create the shared vertex buffer, shader module, and bind group
+    const shared = await createSharedResources(device);
+    // create the render pipelines
+    const opaquePipeline = createOpaquePipeline(device, shared);
+    const transparentPipeline = createTransparentPipeline(device, shared, false);
+    // transparent pipeline with depth writes, to show the artifacts
+    const transparentPipelineDW = createTransparentPipeline(device, shared, true);
 
     // write matrices to camera buffer
     function writeCameraBuffer(device, cameraBuffer, mvMat, projMat) {
@@ -71,9 +92,8 @@ async function main() {
     let timeStep = 0.0;
     let now = 0;
 
-    // Update camera parameters 
-    // viewportID is the viewport number (0/1)
-    function updateCamera() {
+    // Update the uniforms: camera matrices and render parameters
+    function updateUniforms() {
     
         // create lookAt matrix
         const eye = [2, 0, 1];
@@ -111,15 +131,12 @@ async function main() {
             mvMat = lookAtMat;
         }
 
-        // write to opaque buffer
-        writeCameraBuffer(device, opaque.cameraBuffer, mvMat, projMat);
-
-        // write to transparent buffer
-        writeCameraBuffer(device, transparent.cameraBuffer, mvMat, projMat);
+        // write to the camera buffer shared by all pipelines
+        writeCameraBuffer(device, shared.cameraBuffer, mvMat, projMat);
 
         // premultiply alpha?
         let premultAlpha = document.querySelector('#premultAlpha').checked ? 1 : 0;
-        device.queue.writeBuffer(transparent.renderParamsBuffer, 0, new Uint32Array([premultAlpha]));
+        device.queue.writeBuffer(shared.renderParamsBuffer, 0, new Uint32Array([premultAlpha]));
     }
 
     // define render function 
@@ -127,54 +144,40 @@ async function main() {
         // increment time step
         timeStep += 1;
 
-        // update camera params for frame
-        updateCamera();
+        // update uniforms for frame
+        updateUniforms();
 
         // make a command encoder to start encoding commands
-        const encoder = device.createCommandEncoder({ label: 'Opaque encoder' });
-        let pass;
-
-        // Opaque
+        const encoder = device.createCommandEncoder({ label: 'ODT encoder' });
 
         // set texture 
-        opaque.renderPassDescriptor.colorAttachments[0].view = 
+        renderPassDescriptor.colorAttachments[0].view = 
             context.getCurrentTexture().createView();
         // make a render pass encoder to encode render specific commands
-        pass = encoder.beginRenderPass(opaque.renderPassDescriptor);
-        // set camera bind group
-        pass.setBindGroup(0, opaque.cameraBindGroup);
-        // draw 
-        // set vertex buffer
-        pass.setVertexBuffer(0, opaque.vertexBuffer);
-        // set the render pipeline
-        pass.setPipeline(opaque.pipeline);
-        // draw 
+        const pass = encoder.beginRenderPass(renderPassDescriptor);
+
+        // set the bind group and vertex buffer shared by all three quads
+        pass.setBindGroup(0, shared.bindGroup);
+        pass.setVertexBuffer(0, shared.vertexBuffer);
+
+        // Opaque: vertices 0-3
+        pass.setPipeline(opaquePipeline);
         pass.draw(4, 1, 0);
-        // end render pass
-        pass.end();
 
-        // Transparent
+        // Transparent: quad a is vertices 4-7, quad b is vertices 8-11
+        // (same render pass, same vertex buffer, different pipeline)
 
-        // set texture 
-        transparent.renderPassDescriptor.colorAttachments[0].view = 
-            context.getCurrentTexture().createView();
-        // make a render pass encoder to encode render specific commands
-        pass = encoder.beginRenderPass(transparent.renderPassDescriptor);
-        // set camera bind group
-        pass.setBindGroup(0, transparent.cameraBindGroup);
-        // draw 
-        // set vertex buffer
-        pass.setVertexBuffer(0, transparent.vertexBuffer);
-        // set the render pipeline
-        pass.setPipeline(transparent.pipeline);
-        // draw 
+        // depth writes enabled for transparent quads?
+        let depthWrite = document.querySelector('#depthWrite').checked;
+        pass.setPipeline(depthWrite ? transparentPipelineDW : transparentPipeline);
+        // draw in the selected order
         if (document.querySelector('#flipOrder').checked) {
-            pass.draw(4, 1, 0);
             pass.draw(4, 1, 4);
+            pass.draw(4, 1, 8);
         }
         else {
+            pass.draw(4, 1, 8);
             pass.draw(4, 1, 4);
-            pass.draw(4, 1, 0);
         }
         pass.end();
         

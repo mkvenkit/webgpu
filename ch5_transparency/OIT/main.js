@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------
 // main.js
 // 
-// Main JavaScript file for the ODT WebGPU example.
+// Main JavaScript file for the OIT WebGPU example.
 // 
 // Author: Mahesh Venkitachalam
 // 
@@ -9,7 +9,8 @@
 
 // imports from wgpu-matrix 
 import {vec3, mat4} from '../../common/wgpu-matrix.module.js';
-import {createBlendPipeline, createOpaquePipeline, createTransparentPipeline } from './mesh.js';
+import { createSharedResources, createOpaquePipeline, 
+         createTransparentPipeline, createBlendPipeline } from './mesh.js';
 
 // main function 
 async function main() {
@@ -34,19 +35,12 @@ async function main() {
         format: presentationFormat,
     });
 
-    // create a depth texture 
+    // create a depth texture: written by the opaque pass, 
+    // then read by the transparent pass
     const depthTexture = device.createTexture({
         size: [canvas.width, canvas.height],
         format: 'depth24plus',
-        //  sampleCount: 4,
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    });
-
-    // create a texture to hold heads of linked lists at every (x, y)
-    const headTexture = device.createTexture({
-        size: [canvas.width, canvas.height],
-        format: 'depth24plus',
-        usage: GPUTextureUsage.RENDER_ATTACHMENT,
     });
 
     // create a buffer to hold heads of linked lists at every (x, y)
@@ -59,7 +53,9 @@ async function main() {
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
 
-    // staging buffer for initializing headBuffer
+    // staging buffer for initializing headsBuffer every frame:
+    // index_counter starts at 0, and every head starts as
+    // 0xffffffff (empty list)
     let initBuffer = device.createBuffer({
         size: headsBufSize,
         usage: GPUBufferUsage.COPY_SRC,
@@ -67,31 +63,60 @@ async function main() {
     });
     {
         const buffer = new Uint32Array(initBuffer.getMappedRange());
-    
-        for (let i = 0; i < buffer.length; ++i) {
-          buffer[i] = 0xffffffff;
-        }
-    
+        buffer.fill(0xffffffff);
+        buffer[0] = 0; // index_counter
         initBuffer.unmap();
-      }
+    }
 
-    // create a storage buffer for the linked lists 
-    // each element is a vec4u
-    // .x -> next
-    // .y -> rgba
-    // .z -> depth
-    // .w -> unused
-    let bufSize = 64 * canvas.width * canvas.height;
+    // create a storage buffer for the linked list nodes:
+    // room for an average of 4 transparent fragments per pixel
+    // each node is 12 bytes: next (u32), color (u32), depth (f32)
+    const maxNodes = 4 * canvas.width * canvas.height;
     let linkedListBuffer = device.createBuffer({
-        size: bufSize,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        size: maxNodes * 12,
+        usage: GPUBufferUsage.STORAGE,
     });
 
-    // create meshes
-    const opaque = await createOpaquePipeline(device, depthTexture);
-    const transparent = await createTransparentPipeline(device, depthTexture, 
+    // create the shared vertex buffer and uniform buffers
+    const shared = createSharedResources(device);
+    // create the render pipelines
+    const opaque = await createOpaquePipeline(device, shared);
+    const transparent = await createTransparentPipeline(device, shared, depthTexture, 
                                                         headsBuffer, linkedListBuffer);
-    const blend = await createBlendPipeline(device, headsBuffer, linkedListBuffer);
+    const blend = await createBlendPipeline(device, shared, headsBuffer, linkedListBuffer);
+
+    // create the render pass descriptors:
+    // opaque pass - clears color and depth, draws the opaque quad
+    const opaquePassDescriptor = {
+        colorAttachments: [{
+          clearValue:  { r: 0.2, g: 0.2, b: 0.2, a: 1.0 },
+          loadOp: 'clear',
+          storeOp: 'store',
+          view: undefined
+        }],
+        depthStencilAttachment: {
+            view: depthTexture.createView(),
+            depthClearValue: 1.0,
+            depthLoadOp: 'clear',
+            depthStoreOp: 'store',
+        },
+    };
+    // transparent pass - builds the linked lists, writes no color
+    const transparentPassDescriptor = {
+        colorAttachments: [{
+          loadOp: 'load',
+          storeOp: 'store',
+          view: undefined
+        }],
+    };
+    // blend pass - composites the sorted fragments over the opaque scene
+    const blendPassDescriptor = {
+        colorAttachments: [{
+          loadOp: 'load',
+          storeOp: 'store',
+          view: undefined
+        }],
+    };
 
     // write matrices to camera buffer
     function writeCameraBuffer(device, cameraBuffer, mvMat, projMat) {
@@ -118,9 +143,8 @@ async function main() {
     let timeStep = 0.0;
     let now = 0;
 
-    // Update camera parameters 
-    // viewportID is the viewport number (0/1)
-    function updateCamera() {
+    // Update the uniforms: camera matrices and render parameters
+    function updateUniforms() {
         // create lookAt matrix
         const eye = [2, 0, 1];
         const target = [0, 0, 0];
@@ -157,23 +181,13 @@ async function main() {
             mvMat = lookAtMat;
         }
 
-        // write to opaque buffer
-        writeCameraBuffer(device, opaque.cameraBuffer, mvMat, projMat);
+        // write to the camera buffer shared by the opaque and transparent pipelines
+        writeCameraBuffer(device, shared.cameraBuffer, mvMat, projMat);
 
-        // write to transparent buffer
-        writeCameraBuffer(device, transparent.cameraBuffer, mvMat, projMat);
-
-        // write render params
-        const paramsData = new Uint32Array(4);
-        // windowSize
-        paramsData[0] = canvas.width;
-        paramsData[1] = canvas.height;
-        // premultiply alpha?
+        // write render params: window size and the premultiply alpha flag
         let premultAlpha = document.querySelector('#premultAlpha').checked ? 1 : 0;
-        paramsData[2] = premultAlpha;
-        // write to GPU
-        device.queue.writeBuffer(transparent.renderParamsBuffer, 0, paramsData);
-        device.queue.writeBuffer(blend.renderParamsBuffer, 0, paramsData);
+        const paramsData = new Uint32Array([canvas.width, canvas.height, premultAlpha]);
+        device.queue.writeBuffer(shared.renderParamsBuffer, 0, paramsData);
     }
 
     // define render function 
@@ -181,16 +195,13 @@ async function main() {
         // increment time step
         timeStep += 1;
 
-        // update camera params for frame
-        updateCamera();
+        // update uniforms for frame
+        updateUniforms();
 
-        // premultiply alpha?
-        let premultAlpha = document.querySelector('#premultAlpha').checked ? 1 : 0;
-        
         // make a command encoder to start encoding commands
-        const encoder = device.createCommandEncoder({ label: 'Opaque encoder' });
+        const encoder = device.createCommandEncoder({ label: 'OIT encoder' });
 
-        // initialize headBuffer for every frame
+        // reset the linked lists for this frame
         encoder.copyBufferToBuffer(
             initBuffer,
             0, // Source offset
@@ -198,80 +209,47 @@ async function main() {
             0, // Destination offset
             initBuffer.size,
         );
-          
 
+        // all three passes render to the canvas texture
+        const canvasView = context.getCurrentTexture().createView();
         let pass;
 
-        // Opaque
+        // Opaque: vertices 0-3
 
-        // set texture 
-        opaque.renderPassDescriptor.colorAttachments[0].view = 
-            context.getCurrentTexture().createView();
-        // make a render pass encoder to encode render specific commands
-        pass = encoder.beginRenderPass(opaque.renderPassDescriptor);
-        // set camera bind group
-        pass.setBindGroup(0, opaque.cameraBindGroup);
-        // draw 
-        // set vertex buffer
-        pass.setVertexBuffer(0, opaque.vertexBuffer);
-        // set the render pipeline
+        opaquePassDescriptor.colorAttachments[0].view = canvasView;
+        pass = encoder.beginRenderPass(opaquePassDescriptor);
+        pass.setBindGroup(0, opaque.bindGroup);
+        pass.setVertexBuffer(0, shared.vertexBuffer);
         pass.setPipeline(opaque.pipeline);
-        // draw 
         pass.draw(4, 1, 0);
-        // end render pass
         pass.end();
 
-        
-        // Transparent
+        // Transparent: quad a is vertices 4-7, quad b is vertices 8-11
+        // (the draw order no longer affects the result)
 
-        // set texture 
-        transparent.renderPassDescriptor.colorAttachments[0].view = 
-            context.getCurrentTexture().createView();
-        // make a render pass encoder to encode render specific commands
-        pass = encoder.beginRenderPass(transparent.renderPassDescriptor);
-        // set camera bind group
-        pass.setBindGroup(0, transparent.cameraBindGroup);
-        // draw 
-        // set vertex buffer
-        pass.setVertexBuffer(0, transparent.vertexBuffer);
-        // set the render pipeline
+        transparentPassDescriptor.colorAttachments[0].view = canvasView;
+        pass = encoder.beginRenderPass(transparentPassDescriptor);
+        pass.setBindGroup(0, transparent.bindGroup);
+        pass.setVertexBuffer(0, shared.vertexBuffer);
         pass.setPipeline(transparent.pipeline);
-        // draw 
         if (document.querySelector('#flipOrder').checked) {
-            pass.draw(4, 1, 0);
             pass.draw(4, 1, 4);
+            pass.draw(4, 1, 8);
         }
         else {
+            pass.draw(4, 1, 8);
             pass.draw(4, 1, 4);
-            pass.draw(4, 1, 0);
         }
         pass.end();
 
-        
-        // Blend 
+        // Blend: one full-screen quad
 
-        // set texture 
-        blend.renderPassDescriptor.colorAttachments[0].view = 
-            context.getCurrentTexture().createView();
-        // make a render pass encoder to encode render specific commands
-        pass = encoder.beginRenderPass(blend.renderPassDescriptor);
-        
-        // set the render pipeline and bindgroup
-        if (premultAlpha) {
-            // set uniform bind group
-            pass.setBindGroup(0, blend.uniformBindGroupPMA);
-            // set pipeline
-            pass.setPipeline(blend.pipelinePMA);
-        }
-        else {
-            // set uniform bind group
-            pass.setBindGroup(0, blend.uniformBindGroup);
-            // set pipeline
-            pass.setPipeline(blend.pipeline);
-        }
+        blendPassDescriptor.colorAttachments[0].view = canvasView;
+        pass = encoder.beginRenderPass(blendPassDescriptor);
+        pass.setBindGroup(0, blend.bindGroup);
+        pass.setPipeline(blend.pipeline);
         pass.draw(4);
         pass.end();
-        
 
         // end commands 
         const commandBuffer = encoder.finish();
@@ -284,7 +262,6 @@ async function main() {
 
     // request animation
     requestAnimationFrame(render);
-    //render();
 }
 
 // call main function 
