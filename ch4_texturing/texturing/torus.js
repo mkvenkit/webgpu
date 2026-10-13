@@ -162,7 +162,7 @@ export async function createTorus(r, R, device, shaderFile,
     const renderPipeline = device.createRenderPipeline(pipelineDescriptor);
 
     // create uniform buffer to camera params
-    const cameraBufferSize = 448; // 16*5 * 5 + 16 + 16 + 4 + 4 + 4 = 444 -> 448
+    const cameraBufferSize = 432; // 16*4 * 6 + 16 + 16 + 4 + 4 + 4 = 428 -> 432
     // create buffer 
     let cameraBuffer = device.createBuffer({
         size: cameraBufferSize,

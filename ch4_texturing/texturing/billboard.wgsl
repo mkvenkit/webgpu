@@ -35,7 +35,6 @@ struct VertexOut {
     ) -> VertexOut 
 {
     var output : VertexOut;
-    var pos = position + vec3f(0, 0, 0.5);
     output.position = camera.projMat * camera.lookAtMat * camera.modelMat * vec4f(position, 1.0);
     output.uv = uv;
     return output;

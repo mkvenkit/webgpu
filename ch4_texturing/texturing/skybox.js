@@ -8,7 +8,7 @@
 // ----------------------------------------------------------------------
 
 
-// Create render pipeline for axes
+// Create render pipeline for the skybox cube
 export async function createSkybox(device, shaderFile, imageTexture) {
     
     // fetch shader code as a string

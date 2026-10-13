@@ -113,7 +113,7 @@ export async function createPlane(side, device, shaderFile,
     const renderPipeline = device.createRenderPipeline(pipelineDescriptor);
 
     // create uniform buffer to camera params
-    const cameraBufferSize = 448; // 16*5 * 5 + 16 + 16 + 4 + 4 + 4 = 444 -> 448
+    const cameraBufferSize = 432; // 16*4 * 6 + 16 + 16 + 4 + 4 + 4 = 428 -> 432
     // create buffer 
     let cameraBuffer = device.createBuffer({
         size: cameraBufferSize,
@@ -143,45 +143,41 @@ export async function createPlane(side, device, shaderFile,
         },
     ];
 
-    // add textures
-    let offset = 2;
+    // add textures - binding numbers must match those in tex.wgsl
     // image 
     if (texImage) {
         bgEntries.push(
             {
-                binding: offset,
+                binding: 2,
                 resource: texImage.createView(),
             },
         );
-        offset++;
     }
     // normal map
     if (texNMap) {
         bgEntries.push(
             {
-                binding: offset,
+                binding: 3,
                 resource: texNMap.createView(),
             }
         );
-        offset++;
     }
 
     // projected texture
     if (texProj) {
         bgEntries.push(
             {
-                binding: offset,
+                binding: 4,
                 resource: texProj.createView(),
             }
         );
-        offset++;
     }
 
     // add cubemap if set
     if (texCubemap) {
         bgEntries.push(
             {
-                binding: offset,
+                binding: 5,
                 resource: texCubemap.createView(
                     {
                         dimension: "cube",
@@ -189,7 +185,6 @@ export async function createPlane(side, device, shaderFile,
                 ),
             }
         );
-        offset++;
     }
 
     // create bind group using a GPUBindGroupDescriptor

@@ -35,24 +35,17 @@ function createFrustumVertices(thetaV, aspect, near, far) {
     // empy array 
     let vert = [];
 
-    // add lines from origin to near plane
+    // add lines from origin to far plane (these pass through the
+    // corresponding near-plane corner too, since O, A, E are collinear --
+    // and likewise for B/F, C/G, D/H -- so there's no need to draw the
+    // origin-to-near-plane segment separately)
     vert.push(...O, ...black);
-    vert.push(...A, ...black);
-    vert.push(...O, ...black);
-    vert.push(...B, ...black);
-    vert.push(...O, ...black);
-    vert.push(...C, ...black);
-    vert.push(...O, ...black);
-    vert.push(...D, ...black);
-
-    // add lines from near plane to far plane
-    vert.push(...A, ...black);
     vert.push(...E, ...black);
-    vert.push(...B, ...black);
+    vert.push(...O, ...black);
     vert.push(...F, ...black);
-    vert.push(...C, ...black);
+    vert.push(...O, ...black);
     vert.push(...G, ...black);
-    vert.push(...D, ...black);
+    vert.push(...O, ...black);
     vert.push(...H, ...black);
 
     // add near plane 

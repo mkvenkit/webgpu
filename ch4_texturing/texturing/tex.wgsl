@@ -210,7 +210,7 @@ struct VertexOut {
     if ((camera.flagsUI & EnableTextureProjection) != 0) {
         var projTC = camera.texProjMat * fragData.posWC;
         // compute tex coord    
-        texCoord = vec2f(projTC.x / projTC.w, projTC.y / projTC.w);
+        texCoord = projTC.xy / projTC.w;
         // look up texture color 
         var texCol = textureSample(texProj, mySampler, texCoord);
         

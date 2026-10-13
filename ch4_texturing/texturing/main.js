@@ -244,87 +244,127 @@ async function createTextureFromImageFile(device, fileName, useMipMaps) {
         alert(`fetch: HTTP error! status: ${response.status}`);
         return;
     }
-    const imgBitmap = await createImageBitmap(await response.blob());
-    let imageTexture = null;
+    // colorSpaceConversion: 'none' stops the browser from altering the pixel
+    // values, which matters for data textures such as normal maps
+    const imgBitmap = await createImageBitmap(await response.blob(),
+        { colorSpaceConversion: 'none' });
+
+    // number of mip levels - a full chain down to 1x1, or just the base level
+    const mipLevelCount = useMipMaps ? 
+        Math.floor(Math.log2(Math.max(imgBitmap.width, imgBitmap.height))) + 1 : 1;
+
     // create texture 
+    const imageTexture = device.createTexture({
+        size: [imgBitmap.width, imgBitmap.height, 1],
+        mipLevelCount: mipLevelCount,
+        format: 'rgba8unorm',
+        usage:
+            GPUTextureUsage.TEXTURE_BINDING |
+            GPUTextureUsage.COPY_DST |
+            GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
+    // copy the image to mip level 0 
+    device.queue.copyExternalImageToTexture(
+        { source: imgBitmap },
+        { texture: imageTexture },
+        [imgBitmap.width, imgBitmap.height]
+    );
+
+    // generate the remaining mip levels on the GPU
     if (useMipMaps) {
-        // create mipmaps 
-        const mips = await createMipmaps(imgBitmap);
-
-        // create texture 
-        imageTexture = device.createTexture({
-            size: [mips[0].width, mips[0].height],
-            mipLevelCount: mips.length,
-            format: 'rgba8unorm',
-            usage:
-                GPUTextureUsage.TEXTURE_BINDING |
-                GPUTextureUsage.COPY_DST |
-                GPUTextureUsage.RENDER_ATTACHMENT,
-        });
-        // write data 
-        for (let mipLevel = 0; mipLevel < mips.length; mipLevel++) {
-            const { data, width, height } = mips[mipLevel];
-
-            device.queue.writeTexture(
-                { texture: imageTexture, mipLevel: mipLevel },
-                data,
-                { bytesPerRow: width * 4 },
-                { width, height }
-            );
-        }
-    }
-    else {
-        imageTexture = device.createTexture({
-            size: [imgBitmap.width, imgBitmap.height, 1],
-            format: 'rgba8unorm',
-            usage:
-                GPUTextureUsage.TEXTURE_BINDING |
-                GPUTextureUsage.COPY_DST |
-                GPUTextureUsage.RENDER_ATTACHMENT,
-        });
-        device.queue.copyExternalImageToTexture(
-            { source: imgBitmap },
-            { texture: imageTexture },
-            [imgBitmap.width, imgBitmap.height]
-        );
+        generateMipmaps(device, imageTexture);
     }
 
     return imageTexture;
 }
 
 /**
- * Create mipmaps from given image of type ImageBitmap
- * @param {ImageBitmap} imageBitmap 
- * @returns Promise<{{data: imageData.data, width: number, height: number }[]}>
+ * Fill in mip levels 1 and up of a 2D texture. Each level is rendered
+ * from the level above it using linear filtering.
+ * @param {GPUDevice} device 
+ * @param {GPUTexture} texture - mip level 0 must already contain the image
  */
-async function createMipmaps(imageBitmap) {
-    // get image dimensions
-    let width = imageBitmap.width;
-    let height = imageBitmap.height;
+function generateMipmaps(device, texture) {
+    // shader that draws one triangle covering the whole render target, 
+    // and fills it with the (filtered) contents of a texture 
+    const shaderModule = device.createShaderModule({
+        code: `
+            struct VertexOut {
+                @builtin(position) position: vec4f,
+                @location(0) uv: vec2f
+            }
 
-    // define mipmap array
-    let mipmaps = [];
+            @vertex fn vertex_main(@builtin(vertex_index) index: u32) -> VertexOut {
+                var pos = array<vec2f, 3>(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3));
+                var output: VertexOut;
+                output.position = vec4f(pos[index], 0, 1);
+                // clip space y goes up, texture coordinate v goes down
+                output.uv = vec2f(0.5 * pos[index].x + 0.5, 0.5 - 0.5 * pos[index].y);
+                return output;
+            }
 
-    while (width > 1 || height > 1) {
-        // create an offscreen canvas
-        let canvas = new OffscreenCanvas(width, height);
-        let ctx = canvas.getContext('2d');
+            @group(0) @binding(0) var mipSampler: sampler;
+            @group(0) @binding(1) var mipTexture: texture_2d<f32>;
 
-        // draw the image onto the canvas
-        ctx.drawImage(imageBitmap, 0, 0, width, height);
+            @fragment fn fragment_main(fragData: VertexOut) -> @location(0) vec4f {
+                return textureSample(mipTexture, mipSampler, fragData.uv);
+            }
+        `,
+    });
 
-        // get the image data from the canvas
-        let imageData = ctx.getImageData(0, 0, width, height);
+    // create render pipeline 
+    const pipeline = device.createRenderPipeline({
+        layout: 'auto',
+        vertex: {
+            module: shaderModule,
+            entryPoint: 'vertex_main',
+        },
+        fragment: {
+            module: shaderModule,
+            entryPoint: 'fragment_main',
+            targets: [{ format: texture.format }],
+        },
+    });
 
-        // store the mipmap data
-        mipmaps.push({data: imageData.data, width, height });
+    // linear filtering averages each 2x2 block of the larger level
+    const sampler = device.createSampler({
+        minFilter: 'linear',
+        magFilter: 'linear',
+    });
 
-        // Scale down for the next level
-        width = Math.max(1, Math.floor(width / 2));
-        height = Math.max(1, Math.floor(height / 2));
+    const encoder = device.createCommandEncoder();
+
+    // render each level from the previous one 
+    for (let level = 1; level < texture.mipLevelCount; level++) {
+        const bindGroup = device.createBindGroup({
+            layout: pipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: sampler },
+                { binding: 1, resource: texture.createView({
+                    baseMipLevel: level - 1,
+                    mipLevelCount: 1,
+                }) },
+            ],
+        });
+
+        const pass = encoder.beginRenderPass({
+            colorAttachments: [{
+                view: texture.createView({
+                    baseMipLevel: level,
+                    mipLevelCount: 1,
+                }),
+                loadOp: 'clear',
+                storeOp: 'store',
+            }],
+        });
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.draw(3);
+        pass.end();
     }
 
-    return mipmaps;
+    device.queue.submit([encoder.finish()]);
 }
 
 /**
@@ -458,9 +498,9 @@ async function main() {
     });
 
     // fetch textures
-    const texNMapPlane = await createTextureFromImageFile(device, "images/stone-bm.jpg", false);
+    const texNMapPlane = await createTextureFromImageFile(device, "images/stone-bm.jpg", true);
     const texImagePlane = await createTextureFromImageFile(device, "images/stone-col.jpg", true);    
-    const texNMapTorus = await createTextureFromImageFile(device,  "images/penny-nm.png", false);
+    const texNMapTorus = await createTextureFromImageFile(device,  "images/penny-nm.png", true);
     const texImageTorus = await createTextureFromImageFile(device, "images/penny-col.png", true);
     const texProj = await createTextureFromImageFile(device, "images/mandrill.png", true);
     const texBillboard = await createTextureFromImageFile(device, "images/projector.png", true);
@@ -632,8 +672,9 @@ async function main() {
     }
     );
 
-    // time step
+    // time in seconds, and the time elapsed since the previous frame
     let timeStep = 0.0;
+    let deltaTime = 0.0;
     // rotation flag
     let rotate = false;
 
@@ -641,6 +682,8 @@ async function main() {
     const camHeight = 15.0;
     const camRadius = 30.0
     let camTheta = 0.0;
+    // rotation speed in radians per second
+    const camSpeed = 0.06;
     let eye = [0, 15, -15, 1];
     let target = [0.0, 0.0, 0.0];
     let up = [0, 1, 0];
@@ -665,17 +708,15 @@ async function main() {
         rotate = document.querySelector('#rotate').checked;
         if (rotate) {
             // update theta 
-            camTheta += 0.001;
+            camTheta += camSpeed * deltaTime;
             // rotate 
             eye = [camRadius * Math.cos(camTheta), camHeight, camRadius * Math.sin(camTheta), 1];
         }
         else {
             eye = [0, 15, -15, 1];
-            target = [0.0, 0.0, 0.0];
-            up = [0, 1, 0];
         }
         // create lookAt matrix
-        let lookAtMat = mat4.lookAt([eye[0], eye[1], eye[2]], target, up);
+        let lookAtMat = mat4.lookAt(eye, target, up);
 
         // create model matrix
         let modelMat = mat4.identity();
@@ -749,7 +790,7 @@ async function main() {
             P[0], P[1], P[2], 1.0,
         );
         
-        // write uniform data - torus
+        // write uniform data - billboard
         writeUniformBuffer(device, billboard.cameraBuffer, bbMat, lookAtMat, projMat, nMatEC, nMatWC, null, 
             null, null,
             null, null, null);
@@ -768,7 +809,7 @@ async function main() {
     }
 
     // define render function 
-    function render() {
+    function render(time) {
 
         // set texture 
         renderPassDescriptor.colorAttachments[0].view = 
@@ -779,8 +820,10 @@ async function main() {
         // make a render pass encoder to encode render specific commands
         const pass = encoder.beginRenderPass(renderPassDescriptor);
 
-        // increment time step
-        timeStep += 1;
+        // update time - the timestamp is in milliseconds
+        const seconds = time / 1000;
+        deltaTime = (timeStep > 0) ? seconds - timeStep : 0;
+        timeStep = seconds;
 
         // update camera params for frame
         updateCamera();
@@ -835,18 +878,6 @@ async function main() {
         }
         
         // ********************
-        // draw skybox         
-        // ********************
-        if (showSkybox) {
-            // set camera bind group
-            pass.setBindGroup(0, skybox.uniformBindGroup);
-            // set the render pipeline
-            pass.setPipeline(skybox.pipeline);
-            // draw 
-            pass.draw(skybox.count);
-        }
-        
-        // ********************
         // draw XYZ axes         
         // ********************
         if (showAxis) {
@@ -873,6 +904,19 @@ async function main() {
             // draw
             pass.draw(frustum.count);
         }
+
+        // ********************
+        // draw skybox         
+        // ********************
+        if (showSkybox) {
+            // set camera bind group
+            pass.setBindGroup(0, skybox.uniformBindGroup);
+            // set the render pipeline
+            pass.setPipeline(skybox.pipeline);
+            // draw 
+            pass.draw(skybox.count);
+        }
+        
 
         // end render pass
         pass.end();
